@@ -3,19 +3,20 @@
 #
 # 林场实习: 附合导线 + 二等水准 观测数据模拟
 #
-# 场景: 基于 GNSS实习_导线水准观测模型提取_20260616.md
-#   - 附合导线: B → K1 → K2 → … → K9 → G
-#   - 二等水准: B → K1 → … → K9 → G (往返观测, 因瓦基辅尺)
-#   - 导线方位基准: B2-B (起始), G-G2 (终止)
+# 场景: 基于 sample/points.csv 中的模拟 RTK 三维点数据
+#   - 附合导线: B → K1 → K2 → … → K12 → G
+#   - 二等水准: B → K1 → … → K12 → G (往返观测, 因瓦基辅尺)
+#   - 导线方位基准: B2-B (起始已知方位), G-G2 (终止已知方位)
 #
-# 假设数据: 一组三维坐标点 (模拟 RTK 测量结果)
-#   - 平面坐标: 某地方坐标系
+# 数据说明:
+#   - 平面坐标: 某地方坐标系 (X=东向, Y=北向)
 #   - 高程: 椭球高 → 正常高 (常数 zeta 近似)
 
 import math
 import sys
 import os
 import json
+from typing import List, Tuple
 
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -42,31 +43,33 @@ from src.formatters.excel_formatter import workbook_to_excel
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 1. 假设三维点数据 (模拟 RTK 输出)
+# 1. 从 sample/points.csv 加载模拟 RTK 三维点数据
 # ──────────────────────────────────────────────────────────────────────
 
-# 点名, X(m), Y(m), 椭球高(m)
-# 坐标系约定: X=东向(E), Y=北向(N) — 与生成器内部数学方位角一致
-# 方位角 = atan2(dy, dx) 即从正东逆时针
-# 模拟一条约 2.3 km 的附合导线 (大致向东北延伸)
-ELLIPSOID_POINTS = [
-    ("B2",  9800.000,  5000.000,  55.300),   # 起始方位基准 (B 的西南方)
-    ("B",  10000.000,  5000.000,  52.500),   # 导线起点 (已知点)
-    ("K1", 10150.000,  5200.000,  52.800),   # 导线点 1
-    ("K2", 10280.000,  5400.000,  53.200),   # 导线点 2
-    ("K3", 10380.000,  5650.000,  53.100),   # 导线点 3
-    ("K4", 10500.000,  5880.000,  53.500),   # 导线点 4
-    ("K5", 10620.000,  6100.000,  53.800),   # 导线点 5
-    ("K6", 10730.000,  6350.000,  54.200),   # 导线点 6
-    ("K7", 10820.000,  6600.000,  54.000),   # 导线点 7
-    ("K8", 10920.000,  6850.000,  54.500),   # 导线点 8
-    ("K9", 11000.000,  7100.000,  54.800),   # 导线点 9
-    ("G",  11100.000,  7300.000,  55.100),   # 导线终点 (已知点)
-    ("G2", 11200.000,  7500.000,  55.600),   # 终止方位基准 (G 的东北方向)
-]
+SAMPLE_CSV_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "sample", "points.csv"
+)
 
 # 高程异常 (常数近似, 短路线内 zeta 变化小)
 ZETA_CONSTANT = 2.300  # m
+
+
+def load_sample_points(csv_path: str) -> List[Tuple[str, float, float, float]]:
+    """从 CSV 加载 (点名, X, Y, 椭球高) 数据."""
+    points = []
+    with open(csv_path, encoding="utf-8") as f:
+        next(f)  # 跳过表头
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            name = parts[0].strip()
+            x = float(parts[1].strip())
+            y = float(parts[2].strip())
+            z = float(parts[3].strip())
+            points.append((name, x, y, z))
+    return points
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -75,8 +78,12 @@ ZETA_CONSTANT = 2.300  # m
 
 def convert_heights():
     """椭球高 → 正常高"""
-    # 仅转换导线/水准路线上的点 (B, K1-K9, G)
-    traverse_ellipsoid = ELLIPSOID_POINTS[1:12]  # B → G
+    ellipsoid_points = load_sample_points(SAMPLE_CSV_PATH)
+    name_to_point = {p[0]: p for p in ellipsoid_points}
+
+    # 仅转换导线/水准路线上的点 (B, K1-K12, G)
+    route_names = ["B"] + [f"K{i}" for i in range(1, 13)] + ["G"]
+    traverse_ellipsoid = [name_to_point[n] for n in route_names]
 
     normal_points, report = convert_ellipsoid_to_normal(
         points=traverse_ellipsoid,
@@ -105,50 +112,44 @@ def convert_heights():
 # ──────────────────────────────────────────────────────────────────────
 
 def simulate_traversing(normal_points):
-    """一级附合导线模拟"""
+    """一级附合导线模拟 (附合于 B2-B 与 G-G2 已知方位)"""
     print("=" * 72)
     print("【一级附合导线模拟】")
     print()
 
-    # 导线点坐标 (平面)
+    # 从 sample/points.csv 加载全部点 (含 B2, G2)
+    ellipsoid_points = load_sample_points(SAMPLE_CSV_PATH)
+    name_to_point = {p[0]: p for p in ellipsoid_points}
+
+    # 导线点坐标 (平面): B → K1 → ... → K12 → G
     points_xy = [(n, x, y) for n, x, y, _ in normal_points]
 
-    # 起始方位角: B → K1 (第一条边的方位角)
-    # 终止方位角: K9 → G (最后一条边的方位角)
+    # 外部方位基准: B2-B (起始), G-G2 (终止)
+    # 起始方位角 = B2 → B, 终止方位角 = G → G2
     from src.generators.traversing_generator import compute_azimuth
-    az_start = compute_azimuth(
-        points_xy[0][1], points_xy[0][2],
-        points_xy[1][1], points_xy[1][2],
-    )
-    az_end = compute_azimuth(
-        points_xy[-2][1], points_xy[-2][2],
-        points_xy[-1][1], points_xy[-1][2],
-    )
+    b2 = name_to_point["B2"]
+    b = name_to_point["B"]
+    g = name_to_point["G"]
+    g2 = name_to_point["G2"]
 
-    # 外部方位基准点 (附合导线)
-    # B2→B: 起始外部基准方向
-    # G→G2: 终止外部基准方向
-    start_ref = (
-        ELLIPSOID_POINTS[0][0],   # "B2"
-        ELLIPSOID_POINTS[0][1],   # X
-        ELLIPSOID_POINTS[0][2],   # Y
-    )
-    end_ref = (
-        ELLIPSOID_POINTS[-1][0],  # "G2"
-        ELLIPSOID_POINTS[-1][1],  # X
-        ELLIPSOID_POINTS[-1][2],  # Y
-    )
+    az_start = compute_azimuth(b2[1], b2[2], b[1], b[2])  # B2 → B
+    az_end = compute_azimuth(g[1], g[2], g2[1], g2[2])    # G → G2
 
-    # 仪器高/棱镜高
+    start_ref = (b2[0], b2[1], b2[2])
+    end_ref = (g2[0], g2[1], g2[2])
+
+    # 仪器高/棱镜高 (按点名)
     instrument_heights = {
         "B": 1.55, "K1": 1.60, "K2": 1.50, "K3": 1.58,
         "K4": 1.52, "K5": 1.65, "K6": 1.48, "K7": 1.55,
-        "K8": 1.62, "K9": 1.50, "G": 1.58,
+        "K8": 1.62, "K9": 1.50, "K10": 1.58, "K11": 1.55,
+        "K12": 1.60, "G": 1.58,
     }
     prism_heights = {
         "B": 1.25, "K1": 1.30, "K2": 1.20, "K3": 1.28,
         "K4": 1.22, "K5": 1.35, "K6": 1.18, "K7": 1.25,
-        "K8": 1.32, "K9": 1.20, "G": 1.28,
+        "K8": 1.32, "K9": 1.20, "K10": 1.28, "K11": 1.25,
+        "K12": 1.30, "G": 1.28,
     }
 
     metadata = SurveyMetadata(
@@ -248,11 +249,11 @@ def simulate_leveling(normal_points):
     print("【二等水准模拟 (往返观测)】")
     print()
 
-    # 水准路线: B → K1 → … → K9 → G
+    # 水准路线: B → K1 → … → K12 → G (不考虑 B2, G2, 不加转点)
     start_name, start_x, start_y, start_h = normal_points[0]
     end_name, end_x, end_y, end_h = normal_points[-1]
 
-    # 中间控制点 (导线点, 水准必须经过)
+    # 中间控制点 (K1-K12, 水准必须经过)
     intermediate_points = [(n, h) for n, x, y, h in normal_points[1:-1]]
 
     # 计算路线长度
@@ -301,10 +302,8 @@ def simulate_leveling(normal_points):
         instrument_serial="SN-3001",
     )
 
-    # 站数: 二等水准视距<=50m, 路线2.56km, 约 51 个半站距
-    # 21站 (设计值, 偶数站利于视距差累积)
-    # 使用 seed=20260616 时站18累积视距差3.02m略超3.0m限差,
-    # 改用 seed=2026 使视距分配更均匀
+    # 站数: 二等水准视距<=50m, 路线约2.02km
+    # 22站为设计值, 偶数站利于视距差累积
     num_stations = 22
 
     # 生成 (往返观测 + 奇偶站交替 + 真实性参数)
@@ -404,10 +403,21 @@ def run_feasibility_checks():
     print(f"水准 (二等): {lev_report.summary}")
 
     # 导线: RTK 平面精度 vs 一级
-    # 最短边长约 200m
+    # 从 sample 数据计算最短边长
+    ellipsoid_points = load_sample_points(SAMPLE_CSV_PATH)
+    name_to_xy = {p[0]: (p[1], p[2]) for p in ellipsoid_points}
+    route_names = ["B"] + [f"K{i}" for i in range(1, 13)] + ["G"]
+    min_edge_m = float("inf")
+    for i in range(len(route_names) - 1):
+        x1, y1 = name_to_xy[route_names[i]]
+        x2, y2 = name_to_xy[route_names[i + 1]]
+        d = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+        if d < min_edge_m:
+            min_edge_m = d
+
     trav_report = check_traversing_feasibility(
         grade=TraverseGrade.GRADE_1,
-        min_edge_m=200.0,
+        min_edge_m=min_edge_m,
         sigma_XY_m=0.02,
         math_true_value_mode=True,
     )

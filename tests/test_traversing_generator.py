@@ -253,8 +253,9 @@ class TestReproducibility:
             grade=TraverseGrade.GRADE_1, seed=99,
         )
 
-        r1 = wb1.angle_observations[0].sets[0].directions[0].reading_rad
-        r2 = wb2.angle_observations[0].sets[0].directions[0].reading_rad
+        # 后视盘左读数恒为 L0 (不随种子变化), 改用前视盘左读数
+        r1 = wb1.angle_observations[0].sets[0].directions[2].reading_rad
+        r2 = wb2.angle_observations[0].sets[0].directions[2].reading_rad
         assert r1 != r2
 
 

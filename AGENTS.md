@@ -338,25 +338,26 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 - `src/generators/traversing_generator.py`:
   - `generate_traversing_workbook()` 新增 `start_reference_point`/`end_reference_point` 参数
   - 自动计算外部基准方位角并写入 `TraverseInfo`
-  - 生成端点连接角观测（起点站 B2→B→K1, 终点站 K9→G→G2）
+  - 生成端点连接角观测（起点站 B2→B→K1, 终点站 K12→G→G2）
   - `_build_computation()` 重构：支持外部基准方位角传递、虚拟边记录（终点站连接角）
   - 导出公共 API `compute_azimuth` 替代私有 `_compute_azimuth`
 - `src/generators/__init__.py` — 导出 `compute_azimuth`
 - `src/validators/traversing_validator.py` — 优先使用外部基准方位角进行方位角传递，坐标传递方位角索引偏移修正
 - `scripts/simulate_forest_farm.py`:
+  - 改用 `sample/points.csv` 中的模拟 RTK 数据（导线点扩展为 K1-K12）
   - `angle_observation_method` 改为 `MEASUREMENT`
-  - 传入外部基准点 `start_reference_point`/`end_reference_point`
+  - 传入外部基准点 `start_reference_point`/`end_reference_point`，使用 B2-B 与 G-G2 作为已知方位
   - 使用公共 API `compute_azimuth` 替代 `_compute_azimuth`
   - 删除未使用的 `b2_normal`/`g2_normal` 变量
 - `tests/test_traversing_generator.py` — 新增 `TestAttachedTraverse`（5项测试）
 
 关键技术点:
 - 附合导线方位角传递：从外部基准方位角（B2→B）开始，经过起点站连接角、中间站角度、终点站连接角，传播到终止基准方位角（G→G2），与已知值比较得闭合差
-- 端点连接角：起点站（B站）后视=B2、前视=K1；终点站（G站）后视=K9、前视=G2
+- 端点连接角：起点站（B站）后视=B2、前视=K1；终点站（G站）后视=K12、前视=G2
 - `_build_computation` 角度映射：有外部基准时 `angle_obs[0]`=起点站、`[1..n-1]`=中间站、`[n]`=终点站
 - 虚拟边记录：终点站连接角作为无距离的虚拟边追加到 `edge_records`，参与方位角传递但不影响坐标传递
 - 方位角索引偏移：有外部基准时，`azimuths[0]`=外部基准方位角，`edge[i]` 使用 `azimuths[i+1]`
-- 林场脚本验证：方位角闭合差 7.1"，坐标闭合差 48.1mm，全长相对闭合差 1/53230，合规检核合格
+- 林场脚本验证：方位角闭合差 6.08"，坐标闭合差 28.4mm，全长相对闭合差 1/71204，合规检核合格
 - 259/259 测试通过 (前阶段 254 + 阶段十七 5)
 
 ### 阶段十八：水准往返测真实性改进 ✅ 已完成

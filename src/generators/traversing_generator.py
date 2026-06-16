@@ -126,19 +126,18 @@ def _gen_station_angle(
     az_back = _compute_azimuth(x_station, y_station, x_back, y_back)
     az_fore = _compute_azimuth(x_station, y_station, x_fore, y_fore)
 
-    # 真值方向值 (度盘上的角度, 不含零位)
-    true_lbar = {back_name: az_back, fore_name: az_fore}
+    # 真值方向值 (相对于后视方向, 后视为 0)
+    # 实际方向观测法: 瞄准后视设定度盘读数, 后视为起始零方向
+    true_lbar = {back_name: 0.0, fore_name: normalize_angle(az_fore - az_back)}
 
     # 真值水平角
     true_angle = normalize_angle(az_fore - az_back)
 
     angle_sets = []
     for j in range(num_sets):
-        # 度盘零位 (config: L_0_j = π/m * j + offset)
-        L0 = (math.pi / num_sets) * j + _DEGREE_PLATE_OFFSET_RAD
-
-        # 站级方向扰动 (核空间: 所有方向共用)
-        delta_dir = truncated_normal(sigma_dir_rad, rng=rng)
+        # 度盘零位 (config: L_0_j = π/m * j)
+        # 后视盘左读数精确等于 L0 (0°, 90°, 180°, ...)
+        L0 = (math.pi / num_sets) * j
 
         # 测回间角值扰动 (真实性改进: 各测回独立)
         delta_set = truncated_normal(sigma_set_rad, rng=rng)
@@ -157,13 +156,19 @@ def _gen_station_angle(
             # 各方向独立 2C 扰动
             delta_2c = truncated_normal(sigma_2c_rad / 2.0, rng=rng)
 
-            # L = L0 + L_bar + delta_dir + delta_2C / 2 + (delta_set for fore)
-            L = L0 + lbar + delta_dir + target_delta_set + delta_2c / 2.0
-            L = normalize_angle(L)
-
-            # R = L0 + L_bar + delta_dir + (delta_set for fore) - delta_2C / 2 + π
-            R = L0 + lbar + delta_dir + target_delta_set - delta_2c / 2.0 + math.pi
-            R = normalize_angle(R)
+            if target == back_name:
+                # 后视盘左: 无扰动 (观测员瞄准后视设定度盘读数)
+                L = L0
+                L = normalize_angle(L)
+                # 后视盘右: 仅有 2C 效应, 无 delta_dir
+                R = L0 - delta_2c + math.pi
+                R = normalize_angle(R)
+            else:
+                # 前视: 正常扰动 (含 delta_set, delta_2c, 不含 delta_dir)
+                L = L0 + lbar + target_delta_set + delta_2c / 2.0
+                L = normalize_angle(L)
+                R = L0 + lbar + target_delta_set - delta_2c / 2.0 + math.pi
+                R = normalize_angle(R)
 
             directions.append(
                 DirectionReading(target=target, face=Face.LEFT,

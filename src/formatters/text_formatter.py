@@ -18,7 +18,7 @@ from ..models.traversing import (
 )
 from ..models.common import LevelingGrade, RodType
 from ._utils import (
-    rad_to_dms, format_meter, format_mm, format_arcsec,
+    rad_to_dms, format_meter, format_mm, format_arcsec, format_optional,
     build_disclaimer,
 )
 
@@ -448,7 +448,7 @@ def _traversing_closure(wb: TraversingWorkbook) -> str:
     comp = wb.computation
     lines = [
         "\n闭合差汇总:",
-        f"  方位角闭合差: {format_arcsec(comp.azimuth_closure_error_arcsec, 2)}\"",
+        f"  方位角闭合差: {format_optional(comp.azimuth_closure_error_arcsec, '.2f')}\"",
     ]
     if comp.azimuth_closure_limit_arcsec is not None:
         lines.append(f"  方位角限差: ±{comp.azimuth_closure_limit_arcsec:.1f}\"")
