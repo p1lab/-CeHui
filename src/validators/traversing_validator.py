@@ -340,14 +340,18 @@ def validate_traverse_computation(comp: TraverseComputation,
     angle_def = info.angle_definition
 
     # ── 方位角闭合差 ──
-    current_az = info.start_azimuth
-    if current_az is None:
-        # 由起终点坐标反算
-        dx = comp.point_records[1].x_m - comp.point_records[0].x_m \
-            if len(comp.point_records) > 1 else 0
-        dy = comp.point_records[1].y_m - comp.point_records[0].y_m \
-            if len(comp.point_records) > 1 else 0
-        current_az = normalize_angle(math.atan2(dy, dx))
+    # 附合导线: 从外部基准方位角开始传递
+    # 闭合导线: 从首边方位角开始传递
+    if info.start_reference_azimuth is not None:
+        current_az = info.start_reference_azimuth
+    else:
+        current_az = info.start_azimuth
+        if current_az is None:
+            dx = comp.point_records[1].x_m - comp.point_records[0].x_m \
+                if len(comp.point_records) > 1 else 0
+            dy = comp.point_records[1].y_m - comp.point_records[0].y_m \
+                if len(comp.point_records) > 1 else 0
+            current_az = normalize_angle(math.atan2(dy, dx))
 
     # 递推方位角
     azimuths = [current_az]
@@ -359,8 +363,11 @@ def validate_traverse_computation(comp: TraverseComputation,
             azimuths.append(current_az)
 
     # 检查方位角闭合差
-    if info.end_azimuth is not None and len(azimuths) > 1:
-        f_beta = azimuths[-1] - info.end_azimuth
+    # 附合导线: 与终止外部基准方位角比较
+    # 闭合导线: 与终止边方位角比较
+    target_end_az = info.end_reference_azimuth or info.end_azimuth
+    if target_end_az is not None and len(azimuths) > 1:
+        f_beta = azimuths[-1] - target_end_az
         f_beta = normalize_2c(f_beta)  # 归化到小值
         f_beta_arcsec = f_beta * 206265.0
         comp.azimuth_closure_error_arcsec = f_beta_arcsec
@@ -371,12 +378,16 @@ def validate_traverse_computation(comp: TraverseComputation,
         ))
 
     # ── 坐标传递 ──
+    # 无外部基准: azimuths[0] = 首边方位角, edge[i] 使用 azimuths[i]
+    # 有外部基准: azimuths[0] = 外部基准方位角, edge[i] 使用 azimuths[i+1]
+    az_offset = 1 if info.start_reference_azimuth is not None else 0
     current_x = info.start_point_x
     current_y = info.start_point_y
     result.computed_coordinates[info.start_point_name] = (current_x, current_y)
 
     for i, edge_rec in enumerate(comp.edge_records):
-        az = azimuths[i] if i < len(azimuths) else 0.0
+        az_idx = i + az_offset
+        az = azimuths[az_idx] if az_idx < len(azimuths) else 0.0
         edge_rec.azimuth_rad = az
 
         if edge_rec.distance_m is not None:
@@ -433,22 +444,6 @@ def validate_traverse_computation(comp: TraverseComputation,
             computed=comp.relative_closure or 0.0,
             message=f"K = 1/{int(total_length / fd) if fd > 0 else '∞'}"
         ))
-
-    # ── 终点坐标真值验证 ──
-    result.add_check(CheckResult(
-        name="终点X坐标真值验证",
-        computed=current_x,
-        expected=info.end_point_x,
-        passed=abs(current_x - info.end_point_x) < COORD_TOLERANCE_M,
-        message=f"X_end = {current_x:.4f} m, known = {info.end_point_x:.4f} m"
-    ))
-    result.add_check(CheckResult(
-        name="终点Y坐标真值验证",
-        computed=current_y,
-        expected=info.end_point_y,
-        passed=abs(current_y - info.end_point_y) < COORD_TOLERANCE_M,
-        message=f"Y_end = {current_y:.4f} m, known = {info.end_point_y:.4f} m"
-    ))
 
 
 # ──────────────────────────────────────────────────────────────────────

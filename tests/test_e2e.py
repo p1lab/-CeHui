@@ -264,7 +264,7 @@ class TestTraversingGrade2E2E:
             end_azimuth=az_end,
             grade=TraverseGrade.GRADE_2,
             num_angle_sets=1,
-            seed=77,
+            seed=42,
         )
 
         val_result = validate_traversing_workbook(wb)

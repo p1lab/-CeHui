@@ -287,3 +287,58 @@ class TestGenerationMetadata:
             num_stations=3, seed=42,
         )
         assert "教学" in wb.teaching_disclaimer or "模拟" in wb.teaching_disclaimer
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段十六：水准闭合差可控非零化
+# ──────────────────────────────────────────────────────────────────────
+
+class TestLevelingControlledClosure:
+    """水准闭合差可控非零化 (target_closure_ratio)"""
+
+    def test_default_zero_closure(self):
+        """target_closure_ratio=0 时闭合差为零"""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.500, 0.3)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=3, seed=42,
+            target_closure_ratio=0.0,
+        )
+        val = validate_leveling_workbook(wb)
+        # 闭合差应精确为零
+        for item in val.checks:
+            if "闭合差" in item.name:
+                assert item.passed, f"{item.name}: {item.message}"
+
+    def test_nonzero_closure_with_ratio(self):
+        """target_closure_ratio=0.3 时闭合差非零"""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.500, 0.3)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=3, seed=42,
+            target_closure_ratio=0.3,
+        )
+        val = validate_leveling_workbook(wb)
+        # 查找闭合差检查项
+        closure_items = [c for c in val.checks if "闭合差" in c.name]
+        # 应存在非零闭合差
+        has_nonzero = any(
+            c.computed is not None and abs(c.computed) > 1e-6
+            for c in closure_items
+        )
+        assert has_nonzero, "闭合差应为非零"
+
+    def test_closure_within_limit(self):
+        """target_closure_ratio=0.3 时闭合差在限差内"""
+        from src.checkers.leveling_compliance import check_leveling_compliance
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.500, 0.3)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=3, seed=42,
+            target_closure_ratio=0.3,
+        )
+        report = check_leveling_compliance(wb)
+        # 闭合差应在限差内
+        closure_items = [i for i in report.items if "闭合差" in i.name and not i.passed]
+        assert len(closure_items) == 0, \
+            f"闭合差超限: {[i.message for i in closure_items]}"

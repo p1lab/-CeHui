@@ -337,3 +337,157 @@ class TestRoundTripExtra:
         )
         # 等外不支持往返，is_round_trip 应为 False
         assert not wb.is_round_trip
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段十八：往返测真实性改进
+# ──────────────────────────────────────────────────────────────────────
+
+class TestRoundTripRealism:
+    """往返测不符值非零且在限差内"""
+
+    def test_default_zero_discrepancy(self):
+        """默认 target_round_trip_ratio=0 时, 不符值应接近零"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            seed=42,
+        )
+        assert wb.round_trip_discrepancy_mm is not None
+        assert wb.round_trip_discrepancy_mm < 0.01  # 浮点残余, 几乎为零
+
+    def test_nonzero_discrepancy_with_ratio(self):
+        """target_round_trip_ratio > 0 时, 不符值应非零"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+            seed=42,
+        )
+        assert wb.round_trip_discrepancy_mm is not None
+        assert wb.round_trip_discrepancy_mm > 0.1  # 明显非零
+
+    def test_discrepancy_within_limit(self):
+        """往返不符值应在限差内"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+            seed=42,
+        )
+        assert wb.round_trip_passed is True
+
+    def test_discrepancy_approximately_target(self):
+        """不符值应约为 target_round_trip_ratio × 限差"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        for ratio in [0.3, 0.5, 0.7]:
+            wb = generate_leveling_workbook(
+                route=route, grade=LevelingGrade.GRADE_2,
+                num_stations=8,
+                rod_back=rod_back, rod_fore=rod_fore,
+                round_trip=True, observation_sequence="alternate",
+                target_round_trip_ratio=ratio,
+                seed=42,
+            )
+            expected_mm = ratio * wb.round_trip_limit_mm
+            # 允许 20% 相对误差 (取整影响)
+            rel_err = abs(wb.round_trip_discrepancy_mm - expected_mm) / expected_mm
+            assert rel_err < 0.20, (
+                f"ratio={ratio}: discrepancy={wb.round_trip_discrepancy_mm:.3f} mm, "
+                f"expected≈{expected_mm:.3f} mm, rel_err={rel_err:.2%}"
+            )
+
+    def test_round_trip_realism_validation(self):
+        """往返测真实性数据应通过正向验证"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+            seed=42,
+        )
+        result = validate_leveling_workbook(wb)
+        assert result.all_passed, f"验证失败: {[c.message for c in result.checks if not c.passed]}"
+
+    def test_round_trip_realism_compliance(self):
+        """往返测真实性数据应通过合规检核"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+            seed=42,
+        )
+        report = check_leveling_compliance(wb)
+        assert report.passed, f"合规失败: {[i.message for i in report.items if not i.passed]}"
+
+    def test_grade3_round_trip_realism(self):
+        """三等水准往返测真实性"""
+        route = RouteInfo("BM1", 100.000, "BM2", 101.500, total_length_km=1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=10, round_trip=True,
+            observation_sequence="alternate",
+            target_round_trip_ratio=0.4,
+            seed=42,
+        )
+        assert wb.is_round_trip
+        assert wb.round_trip_discrepancy_mm > 0.1
+        assert wb.round_trip_passed is True
+        # 三等限差系数 12
+        expected_limit = 12.0 * math.sqrt(1.5)
+        assert abs(wb.round_trip_limit_mm - expected_limit) < 0.01
+
+    def test_round_trip_ratio_overrides_closure_ratio(self):
+        """target_round_trip_ratio > 0 时, 各测段闭合差应为零"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_closure_ratio=0.3,
+            target_round_trip_ratio=0.5,
+            seed=42,
+        )
+        # target_round_trip_ratio > 0 时, 各测段闭合差归零
+        for section in wb.sections:
+            if section.closure_error_mm is not None:
+                assert abs(section.closure_error_mm) < 0.01, (
+                    f"测段 {section.section_id} 闭合差应为零: {section.closure_error_mm:.3f} mm"
+                )
+
+    def test_reproducibility(self):
+        """相同种子应产生相同不符值"""
+        route = _grade2_route()
+        rod_back, rod_fore = _grade2_rods()
+        kwargs = dict(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8,
+            rod_back=rod_back, rod_fore=rod_fore,
+            round_trip=True, observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+        )
+        wb1 = generate_leveling_workbook(seed=123, **kwargs)
+        wb2 = generate_leveling_workbook(seed=123, **kwargs)
+        assert abs(wb1.round_trip_discrepancy_mm - wb2.round_trip_discrepancy_mm) < 1e-10

@@ -97,11 +97,7 @@ def convert_heights():
         )
     print()
 
-    # 方位基准点也转换
-    b2_normal = ELLIPSOID_POINTS[0][3] - ZETA_CONSTANT
-    g2_normal = ELLIPSOID_POINTS[-1][3] - ZETA_CONSTANT
-
-    return normal_points, b2_normal, g2_normal
+    return normal_points
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -118,29 +114,29 @@ def simulate_traversing(normal_points):
     points_xy = [(n, x, y) for n, x, y, _ in normal_points]
 
     # 起始方位角: B → K1 (第一条边的方位角)
-    # 注意: 当前生成器要求 start_azimuth 为第一条边的方位角,
-    #       end_azimuth 为最后一条边的方位角 (非外部方位基准)
-    from src.validators.traversing_validator import normalize_angle
-    from src.generators.traversing_generator import _compute_azimuth
-    az_start = _compute_azimuth(
+    # 终止方位角: K9 → G (最后一条边的方位角)
+    from src.generators.traversing_generator import compute_azimuth
+    az_start = compute_azimuth(
         points_xy[0][1], points_xy[0][2],
         points_xy[1][1], points_xy[1][2],
     )
-
-    # 终止方位角: K9 → G (最后一条边的方位角)
-    az_end = _compute_azimuth(
+    az_end = compute_azimuth(
         points_xy[-2][1], points_xy[-2][2],
         points_xy[-1][1], points_xy[-1][2],
     )
 
-    # 外部方位基准 (B2→B 和 G→G2) 用于独立计算角度闭合差
-    az_b2_b = _compute_azimuth(
-        ELLIPSOID_POINTS[0][1], ELLIPSOID_POINTS[0][2],
-        points_xy[0][1], points_xy[0][2],
+    # 外部方位基准点 (附合导线)
+    # B2→B: 起始外部基准方向
+    # G→G2: 终止外部基准方向
+    start_ref = (
+        ELLIPSOID_POINTS[0][0],   # "B2"
+        ELLIPSOID_POINTS[0][1],   # X
+        ELLIPSOID_POINTS[0][2],   # Y
     )
-    az_g_g2 = _compute_azimuth(
-        points_xy[-1][1], points_xy[-1][2],
-        ELLIPSOID_POINTS[-1][1], ELLIPSOID_POINTS[-1][2],
+    end_ref = (
+        ELLIPSOID_POINTS[-1][0],  # "G2"
+        ELLIPSOID_POINTS[-1][1],  # X
+        ELLIPSOID_POINTS[-1][2],  # Y
     )
 
     # 仪器高/棱镜高
@@ -164,6 +160,8 @@ def simulate_traversing(normal_points):
     )
 
     # 生成导线观测数据
+    # P5: 使用 MEASUREMENT (测回法) 而非 DIRECTION (方向观测法)
+    # P6: 传入外部基准点, 生成器自动计算连接角和方位角闭合差
     wb = generate_traversing_workbook(
         points=points_xy,
         start_azimuth=az_start,
@@ -172,12 +170,14 @@ def simulate_traversing(normal_points):
         instrument_grade=InstrumentGrade.SEC_2,
         num_angle_sets=2,
         angle_definition=AngleDefinition.LEFT_ANGLE,
-        angle_observation_method=AngleObservationMethod.DIRECTION,
+        angle_observation_method=AngleObservationMethod.MEASUREMENT,
         num_distance_sets=2,
         instrument_heights=instrument_heights,
         prism_heights=prism_heights,
         metadata=metadata,
         seed=20260616,
+        start_reference_point=start_ref,
+        end_reference_point=end_ref,
     )
 
     # 正向验证
@@ -307,7 +307,7 @@ def simulate_leveling(normal_points):
     # 改用 seed=2026 使视距分配更均匀
     num_stations = 22
 
-    # 生成 (往返观测 + 奇偶站交替)
+    # 生成 (往返观测 + 奇偶站交替 + 真实性参数)
     wb = generate_leveling_workbook(
         route=route,
         grade=LevelingGrade.GRADE_2,
@@ -320,6 +320,8 @@ def simulate_leveling(normal_points):
         round_trip=True,
         return_section_id="S2",
         observation_sequence="alternate",
+        target_closure_ratio=0.3,       # 各测段闭合差约为限差的30%
+        target_round_trip_ratio=0.4,    # 往返不符值约为限差的40%
     )
 
     # 正向验证
@@ -463,7 +465,7 @@ def main():
     run_feasibility_checks()
 
     # 2. 高程基准转换
-    normal_points, b2_h, g2_h = convert_heights()
+    normal_points = convert_heights()
 
     # 3. 导线模拟
     trav_wb = simulate_traversing(normal_points)

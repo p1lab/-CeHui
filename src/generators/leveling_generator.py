@@ -89,6 +89,15 @@ _GRADE_PARAMS = {
 }
 
 
+# 往返测高差不符值限差系数 (C × √L mm, L 单位 km)
+_ROUND_TRIP_LIMIT_COEFF = {
+    LevelingGrade.GRADE_2: 4.0,
+    LevelingGrade.GRADE_3: 12.0,
+    LevelingGrade.GRADE_4: 20.0,
+    LevelingGrade.EXTRA: 40.0,
+}
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 高差分配 (总和精确等于 dh_total)
 # ──────────────────────────────────────────────────────────────────────
@@ -350,6 +359,87 @@ def _apply_closure_correction_extra(
         last_station_data["foresight_2_m"] + closure, reading_dp)
 
 
+def _apply_target_residual(
+    last_station_data: dict,
+    route: RouteInfo,
+    grade: LevelingGrade,
+    target_ratio: float,
+    reading_dp: int,
+    rng: np.random.Generator,
+    is_extra: bool = False,
+    rod: Optional[RodSpec] = None,
+):
+    """
+    在闭合差归零后, 对末站前视施加受控残差, 使闭合差达到目标值.
+
+    目标闭合差 = target_ratio × 限差 × 随机符号
+    限差: 三等 12√L mm, 四等 20√L mm, 等外 40√L mm, 二等 4√L mm
+    """
+    L_km = route.total_length_km
+    if L_km < 0.001:
+        L_km = 0.001  # 防止除零
+
+    # 各等级限差公式 (mm)
+    limit_mm = {
+        LevelingGrade.GRADE_2: 4.0 * math.sqrt(L_km),
+        LevelingGrade.GRADE_3: 12.0 * math.sqrt(L_km),
+        LevelingGrade.GRADE_4: 20.0 * math.sqrt(L_km),
+        LevelingGrade.EXTRA:   40.0 * math.sqrt(L_km),
+    }.get(grade, 12.0 * math.sqrt(L_km))
+
+    # 目标闭合差 (m), 随机符号
+    target_closure_m = target_ratio * limit_mm / 1000.0
+    sign = rng.choice([-1.0, 1.0])
+    residual_m = target_closure_m * sign
+
+    # 施加到末站前视: 前视加 residual → 高差减少 residual → 闭合差 = residual
+    if is_extra:
+        last_station_data["foresight_1_m"] = round_reading(
+            last_station_data["foresight_1_m"] + residual_m, reading_dp)
+        last_station_data["foresight_2_m"] = round_reading(
+            last_station_data["foresight_2_m"] + residual_m, reading_dp)
+    else:
+        fs = last_station_data["foresight"]
+        fs.black_mid_m = round_reading(fs.black_mid_m + residual_m, reading_dp)
+        if rod and rod.rod_type == RodType.INVAR_BASIC_AUX:
+            fs.aux_mid_m = round_reading(fs.aux_mid_m + residual_m, reading_dp)
+        else:
+            fs.red_mid_m = round_reading(fs.red_mid_m + residual_m, reading_dp)
+
+
+def _compute_section_sum_h(section: LevelingSection) -> float:
+    """从测站黑面读数计算高差总和 (m)."""
+    total = 0.0
+    for s in section.stations:
+        if s.backsight.black_mid_m is not None and s.foresight.black_mid_m is not None:
+            total += s.backsight.black_mid_m - s.foresight.black_mid_m
+    return total
+
+
+def _apply_round_trip_residual(
+    return_section: LevelingSection,
+    residual_m: float,
+    reading_dp: int,
+):
+    """
+    对返测末站前视施加往返测残差.
+
+    黑面/红面(或基辅)同步偏移, 保持 K+黑-红 / 基辅读数差不变.
+    残差加到前视 → 高差减少 residual → 往返不符值 = |residual|
+    """
+    last_station = return_section.stations[-1]
+    fs = last_station.foresight
+
+    if fs.black_mid_m is not None:
+        fs.black_mid_m = round_reading(fs.black_mid_m + residual_m, reading_dp)
+
+    # 红面或辅助分划 (同步偏移, 保持检核差不变)
+    if fs.red_mid_m is not None:
+        fs.red_mid_m = round_reading(fs.red_mid_m + residual_m, reading_dp)
+    if fs.aux_mid_m is not None:
+        fs.aux_mid_m = round_reading(fs.aux_mid_m + residual_m, reading_dp)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 主入口
 # ──────────────────────────────────────────────────────────────────────
@@ -367,6 +457,8 @@ def generate_leveling_workbook(
     round_trip: bool = False,
     return_section_id: str = "S2",
     observation_sequence: str = "alternate",
+    target_closure_ratio: float = 0.0,
+    target_round_trip_ratio: float = 0.0,
 ) -> LevelingWorkbook:
     """
     从 RTK 高程真值逆向生成水准观测手簿.
@@ -383,13 +475,16 @@ def generate_leveling_workbook(
         round_trip: 是否生成往返观测 (二等水准)
         return_section_id: 返测测段编号
         observation_sequence: "alternate"=奇偶站交替, "uniform"=统一顺序
+        target_closure_ratio: 目标闭合差/限差比值 (0-1, 默认0=精确零)
+        target_round_trip_ratio: 目标往返不符值/限差比值 (0-1, 默认0=精确零)
 
     返回:
         LevelingWorkbook (可通过 validate_leveling_workbook 验证)
 
     数学保证:
         - 核空间约束: 每站后视前视读数施加同向等量扰动, 高差精确不变
-        - 闭合差: 经末站校正后精确为零 (终点高程验证通过)
+        - 闭合差: target_closure_ratio=0 时精确为零; >0 时保留受控残差
+        - 往返不符值: target_round_trip_ratio=0 时精确为零; >0 时保留受控残差
         - 读数精度: 按等级取整 (二等 0.1mm, 三四等 1mm)
     """
     rng = np.random.default_rng(seed)
@@ -413,6 +508,11 @@ def generate_leveling_workbook(
 
     is_extra = (grade == LevelingGrade.EXTRA)
 
+    # 往返测残差控制: target_round_trip_ratio > 0 时, 各测段闭合差归零, 仅控制往返不符值
+    effective_closure_ratio = target_closure_ratio
+    if round_trip and target_round_trip_ratio > 0:
+        effective_closure_ratio = 0.0
+
     # ── 生成往测 ──
     outbound_section, outbound_stations_raw = _generate_single_section(
         route=route, grade=grade, num_stations=num_stations,
@@ -422,6 +522,7 @@ def generate_leveling_workbook(
         is_extra=is_extra,
         observation_sequence_mode=observation_sequence,
         is_outbound=True,
+        target_closure_ratio=effective_closure_ratio,
     )
 
     sections = [outbound_section]
@@ -450,8 +551,21 @@ def generate_leveling_workbook(
             is_extra=False,
             observation_sequence_mode=observation_sequence,
             is_outbound=False,
+            target_closure_ratio=effective_closure_ratio,
         )
         sections.append(return_section)
+
+        # ── 往返测残差: 使不符值非零且受控 ──
+        if target_round_trip_ratio > 0:
+            L_km = route.total_length_km or 1.0
+            coeff = _ROUND_TRIP_LIMIT_COEFF.get(grade, 12.0)
+            limit_mm = coeff * math.sqrt(L_km)
+            target_m = target_round_trip_ratio * limit_mm / 1000.0
+            sign = rng.choice([-1.0, 1.0])
+            # 分摊到往测和返测, 各自闭合差 = half_residual, 往返不符值 = target
+            half_residual_m = target_m * sign / 2.0
+            _apply_round_trip_residual(sections[0], half_residual_m, reading_dp)
+            _apply_round_trip_residual(sections[1], half_residual_m, reading_dp)
 
     # ── 构造 Workbook ──
     if is_extra:
@@ -473,15 +587,16 @@ def generate_leveling_workbook(
 
     # ── 往返测高差不符值 ──
     if workbook.is_round_trip and len(sections) == 2:
-        h_outbound = sections[0].sum_height_diff_m or 0.0
-        h_return = sections[1].sum_height_diff_m or 0.0
+        h_outbound = _compute_section_sum_h(sections[0])
+        h_return = _compute_section_sum_h(sections[1])
         # 往测高差 + 返测高差，理论为 0 (h_往 = -(h_返))
         discrepancy_mm = abs(h_outbound + h_return) * 1000.0
         L_km = route.total_length_km or 1.0
-        limit_mm = 4.0 * math.sqrt(L_km)  # 二等水准限差 4√L
-        workbook.round_trip_discrepancy_mm = discrepancy_mm
-        workbook.round_trip_limit_mm = limit_mm
-        workbook.round_trip_passed = discrepancy_mm <= limit_mm
+        coeff = _ROUND_TRIP_LIMIT_COEFF.get(grade, 12.0)
+        limit_mm = coeff * math.sqrt(L_km)
+        workbook.round_trip_discrepancy_mm = float(discrepancy_mm)
+        workbook.round_trip_limit_mm = float(limit_mm)
+        workbook.round_trip_passed = bool(discrepancy_mm <= limit_mm)
 
     return workbook
 
@@ -606,6 +721,7 @@ def _generate_single_section(
     is_extra: bool,
     observation_sequence_mode: str = "uniform",
     is_outbound: bool = True,
+    target_closure_ratio: float = 0.0,
 ):
     """
     生成单个测段 (往测或返测).
@@ -680,6 +796,8 @@ def _generate_single_section(
         station_data_list.append(sd)
 
     # ── 闭合差校正 (末站前视调整) ──
+    # target_closure_ratio = 0: 完全校正, 闭合差精确为零
+    # target_closure_ratio > 0: 完全校正后, 再施加受控残差
     if is_extra:
         closure = sum(
             (sd["backsight_1_m"] - sd["foresight_1_m"]) +
@@ -689,6 +807,11 @@ def _generate_single_section(
         if abs(closure) > 1e-12:
             _apply_closure_correction_extra(
                 station_data_list[-1], closure, reading_dp)
+        # 施加受控残差
+        if target_closure_ratio > 0:
+            _apply_target_residual(
+                station_data_list[-1], route, grade,
+                target_closure_ratio, reading_dp, rng, is_extra=True)
     else:
         closure = sum(
             sd["backsight"].black_mid_m - sd["foresight"].black_mid_m
@@ -701,6 +824,12 @@ def _generate_single_section(
             else:
                 _apply_closure_correction_double_face(
                     station_data_list[-1], closure, reading_dp)
+        # 施加受控残差
+        if target_closure_ratio > 0:
+            _apply_target_residual(
+                station_data_list[-1], route, grade,
+                target_closure_ratio, reading_dp, rng,
+                is_extra=False, rod=rod_back)
 
     # ── 构造模型对象 ──
     if is_extra:

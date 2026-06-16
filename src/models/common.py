@@ -117,6 +117,11 @@ class TraverseInfo:
     start_azimuth: Optional[float] = None  # 起始方位角 (rad), 由坐标反算
     end_azimuth: Optional[float] = None    # 终止方位角 (rad), 由坐标反算
     angle_definition: AngleDefinition = AngleDefinition.LEFT_ANGLE
+    # 外部方位基准 (附合导线)
+    start_reference_azimuth: Optional[float] = None  # 起始外部基准方位角 (rad)
+    end_reference_azimuth: Optional[float] = None    # 终止外部基准方位角 (rad)
+    start_reference_point: Optional[str] = None      # 起始基准点名 (如 "B2")
+    end_reference_point: Optional[str] = None        # 终止基准点名 (如 "G2")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -176,7 +181,9 @@ class GenerationMetadata:
     # 扰动强度 (实际使用的 sigma 值)
     leveling_sigma_mm: Optional[float] = None     # 水准读数扰动 sigma (mm)
     angle_sigma_arcsec: Optional[float] = None     # 导线角度扰动 sigma (")
+    angle_set_sigma_arcsec: Optional[float] = None  # 导线测回间角值扰动 sigma (")
     distance_sigma_mm: Optional[float] = None      # 导线距离扰动 sigma (mm)
+    distance_reading_sigma_mm: Optional[float] = None  # 导线距离读数扰动 sigma (mm)
 
     # 数学真值假设
     math_true_value_mode: bool = True

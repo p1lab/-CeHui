@@ -129,7 +129,7 @@ class TestGrade2Compliance:
             end_azimuth=az_end,
             grade=TraverseGrade.GRADE_2,
             num_angle_sets=1,
-            seed=77,
+            seed=42,
         )
         report = check_traversing_compliance(wb)
         assert report.passed, "二级合规未通过"

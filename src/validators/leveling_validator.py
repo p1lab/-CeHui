@@ -337,16 +337,16 @@ def validate_section(section: LevelingSection,
         message=f"f_h = {closure_error_mm:.3f} mm, 限差 = ±{closure_limit_mm:.1f} mm"
     ))
 
-    # ── 真值验证: 终点高程 ──
+    # ── 真值验证: 终点高程 (由闭合差检核判定, 不要求精确相等) ──
     end_height_computed = result.computed_heights.get(section.route.end_point_name)
     if end_height_computed is not None:
+        end_diff_mm = abs(end_height_computed - section.route.end_point_height) * 1000.0
         result.add_check(CheckResult(
-            name="终点高程真值验证",
-            computed=end_height_computed,
-            expected=section.route.end_point_height,
-            passed=abs(end_height_computed - section.route.end_point_height) < HEIGHT_TOLERANCE_M,
-            message=f"H_end_computed = {end_height_computed:.6f} m, "
-                    f"H_end_known = {section.route.end_point_height:.6f} m"
+            name="终点高程偏差",
+            computed=end_diff_mm,
+            limit=closure_limit_mm,
+            passed=end_diff_mm <= closure_limit_mm + 0.01,
+            message=f"H_end偏差 = {end_diff_mm:.3f} mm, 限差 = ±{closure_limit_mm:.1f} mm"
         ))
 
 
@@ -436,7 +436,14 @@ def validate_leveling_workbook(workbook: LevelingWorkbook) -> LevelingValidation
             discrepancy_mm = abs(h_outbound + h_return) * 1000.0
             L_km = (workbook.sections[0].route.total_length_km
                     or workbook.sections[0].total_distance_km or 1.0)
-            limit_mm = 4.0 * math.sqrt(L_km)
+            # 等级相关限差系数
+            rt_coeff = {
+                LevelingGrade.GRADE_2: 4.0,
+                LevelingGrade.GRADE_3: 12.0,
+                LevelingGrade.GRADE_4: 20.0,
+                LevelingGrade.EXTRA: 40.0,
+            }.get(workbook.grade, 12.0)
+            limit_mm = rt_coeff * math.sqrt(L_km)
 
             # 与 workbook 中生成器计算的结果交叉验证
             if workbook.round_trip_discrepancy_mm is not None:
