@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 import math
 
-from ..models.common import TraverseGrade, InstrumentGrade
+from ..models.common import TraverseGrade, InstrumentGrade, AngleObservationMethod
 from ..models.traversing import TraversingWorkbook, StationAngleObservation
 from ..validators.traversing_validator import (
     validate_traversing_workbook, normalize_angle,
@@ -52,53 +52,125 @@ class TraversingComplianceReport:
 
 # ──────────────────────────────────────────────────────────────────────
 # 限差参数 (硬编码, 与 config_traversing.json 保持一致)
+#
+# 结构: grade → observation_method → instrument_grade → check_name → limit
+#
+# 观测方法分支 (GB 50026-2020):
+#   方向观测法 (direction): 方向数 ≥ 3, 含归零, 限差取表 4.3.3
+#   测回法 (measurement): 仅前后两方向, 无归零, 限差取表 4.3.4
 # ──────────────────────────────────────────────────────────────────────
 
 _TRAVERSING_LIMITS = {
     TraverseGrade.GRADE_1: {
-        "2sec": {
-            "2c_mutual_diff_arcsec": 13.0,
-            "direction_diff_across_sets_arcsec": 9.0,
+        # ── 方向观测法 (direction) ──
+        AngleObservationMethod.DIRECTION: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_return_zero_diff_arcsec": 8.0,
+                "direction_diff_across_sets_arcsec": 9.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_return_zero_diff_arcsec": 12.0,
+                "direction_diff_across_sets_arcsec": 12.0,
+            },
+            "half_set_diff_arcsec": 12.0,
+            "reading_diff_mm": 5.0,
+            "round_trip_diff_mm": 10.0,
+            "azimuth_closure_coefficient": 10.0,
+            "relative_closure_denominator": 15000,
         },
-        "6sec": {
-            "2c_mutual_diff_arcsec": 18.0,
-            "direction_diff_across_sets_arcsec": 12.0,
+        # ── 测回法 (measurement) ──
+        AngleObservationMethod.MEASUREMENT: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_diff_arcsec": 9.0,
+                "set_diff_arcsec": 10.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_diff_arcsec": 18.0,
+                "set_diff_arcsec": 24.0,
+            },
+            "reading_diff_mm": 10.0,
+            "round_trip_diff_mm": 10.0,
+            "azimuth_closure_coefficient": 10.0,
+            "relative_closure_denominator": 15000,
         },
-        "half_set_diff_arcsec": 12.0,
-        "reading_diff_mm": 5.0,
-        "round_trip_diff_mm": 10.0,
-        "azimuth_closure_coefficient": 10.0,
-        "relative_closure_denominator": 15000,
     },
     TraverseGrade.GRADE_2: {
-        "2sec": {
-            "2c_mutual_diff_arcsec": 13.0,
-            "direction_diff_across_sets_arcsec": 9.0,
+        # ── 方向观测法 (direction) ──
+        AngleObservationMethod.DIRECTION: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_return_zero_diff_arcsec": 8.0,
+                "direction_diff_across_sets_arcsec": 9.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_return_zero_diff_arcsec": 12.0,
+                "direction_diff_across_sets_arcsec": 12.0,
+            },
+            "half_set_diff_arcsec": 12.0,
+            "reading_diff_mm": 5.0,
+            "round_trip_diff_mm": 10.0,
+            "azimuth_closure_coefficient": 16.0,
+            "relative_closure_denominator": 10000,
         },
-        "6sec": {
-            "2c_mutual_diff_arcsec": 18.0,
-            "direction_diff_across_sets_arcsec": 12.0,
+        # ── 测回法 (measurement) ──
+        AngleObservationMethod.MEASUREMENT: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_diff_arcsec": 9.0,
+                "set_diff_arcsec": 10.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_diff_arcsec": 18.0,
+                "set_diff_arcsec": 24.0,
+            },
+            "reading_diff_mm": 10.0,
+            "round_trip_diff_mm": 10.0,
+            "azimuth_closure_coefficient": 16.0,
+            "relative_closure_denominator": 10000,
         },
-        "half_set_diff_arcsec": 12.0,
-        "reading_diff_mm": 5.0,
-        "round_trip_diff_mm": 10.0,
-        "azimuth_closure_coefficient": 16.0,
-        "relative_closure_denominator": 10000,
     },
     TraverseGrade.ROOT: {
-        "2sec": {
-            "2c_mutual_diff_arcsec": 13.0,
-            "direction_diff_across_sets_arcsec": 9.0,
+        # ── 方向观测法 (direction) ──
+        AngleObservationMethod.DIRECTION: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_return_zero_diff_arcsec": 8.0,
+                "direction_diff_across_sets_arcsec": 9.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_return_zero_diff_arcsec": 12.0,
+                "direction_diff_across_sets_arcsec": 12.0,
+            },
+            "half_set_diff_arcsec": 30.0,
+            "reading_diff_mm": 10.0,
+            "round_trip_diff_mm": 20.0,
+            "azimuth_closure_coefficient": 10.0,
+            "relative_closure_denominator": 2000,
         },
-        "6sec": {
-            "2c_mutual_diff_arcsec": 18.0,
-            "direction_diff_across_sets_arcsec": 12.0,
+        # ── 测回法 (measurement) ──
+        AngleObservationMethod.MEASUREMENT: {
+            "2sec": {
+                "2c_mutual_diff_arcsec": 13.0,
+                "half_set_diff_arcsec": 24.0,
+                "set_diff_arcsec": 24.0,
+            },
+            "6sec": {
+                "2c_mutual_diff_arcsec": 18.0,
+                "half_set_diff_arcsec": 36.0,
+                "set_diff_arcsec": 36.0,
+            },
+            "reading_diff_mm": 15.0,
+            "round_trip_diff_mm": 20.0,
+            "azimuth_closure_coefficient": 10.0,
+            "relative_closure_denominator": 2000,
         },
-        "half_set_diff_arcsec": 30.0,
-        "reading_diff_mm": 10.0,
-        "round_trip_diff_mm": 20.0,
-        "azimuth_closure_coefficient": 10.0,
-        "relative_closure_denominator": 2000,
     },
 }
 
@@ -164,11 +236,27 @@ def _check_angle_observations(
     inst_key: str,
     report: TraversingComplianceReport,
 ):
-    """检核各站角度观测."""
+    """检核各站角度观测.
+
+    根据观测方法 (方向观测法 vs 测回法) 选取不同的限差:
+    - 方向观测法: half_set_diff 取顶级值, direction_diff_across_sets 取仪器级值
+    - 测回法: half_set_diff 取仪器级值, set_diff 取仪器级值
+    """
     inst_limits = limits.get(inst_key, {})
+    obs_method = workbook.angle_observation_method
     limit_2c = inst_limits.get("2c_mutual_diff_arcsec", 13.0)
-    limit_half = limits.get("half_set_diff_arcsec", 12.0)
-    limit_dir = inst_limits.get("direction_diff_across_sets_arcsec", 9.0)
+
+    # 半测回较差限差: 测回法从仪器级取, 方向观测法从顶级取
+    if obs_method == AngleObservationMethod.MEASUREMENT:
+        limit_half = inst_limits.get("half_set_diff_arcsec", 12.0)
+    else:
+        limit_half = limits.get("half_set_diff_arcsec", 12.0)
+
+    # 测回间较差限差: 测回法用 set_diff, 方向观测法用 direction_diff_across_sets
+    if obs_method == AngleObservationMethod.MEASUREMENT:
+        limit_set = inst_limits.get("set_diff_arcsec", None)
+    else:
+        limit_set = inst_limits.get("direction_diff_across_sets_arcsec", 9.0)
 
     for obs in workbook.angle_observations:
         sn = obs.station_name
@@ -199,20 +287,46 @@ def _check_angle_observations(
                     station=sn,
                 ))
 
-        # ── 方向值跨测回较差 ──
-        dir_diff = _compute_direction_diff_across_sets(obs)
-        if dir_diff is not None:
-            # 填充 model 字段 (补充计算)
-            obs.max_direction_diff_across_sets_arcsec = dir_diff
-            report.add_item(ComplianceItem(
-                name=f"站{sn}_方向值跨测回较差",
-                computed=dir_diff,
-                limit=limit_dir,
-                passed=dir_diff <= limit_dir,
-                message=(f"max差 = {dir_diff:.2f}\" "
-                         f"≤ {limit_dir:.1f}\""),
-                station=sn,
-            ))
+        # ── 测回间较差 (方向观测法: 方向值跨测回; 测回法: 角值跨测回) ──
+        if obs_method == AngleObservationMethod.MEASUREMENT:
+            # 测回法: 计算各测回角值间的较差
+            set_angles = []
+            for aset in obs.sets:
+                if aset.set_angle_rad is not None:
+                    set_angles.append(aset.set_angle_rad)
+            if len(set_angles) >= 2 and limit_set is not None:
+                max_set_diff = 0.0
+                for i in range(len(set_angles)):
+                    for j in range(i + 1, len(set_angles)):
+                        diff = abs(set_angles[i] - set_angles[j])
+                        if diff > math.pi:
+                            diff = 2 * math.pi - diff
+                        max_set_diff = max(max_set_diff, diff)
+                max_set_diff_arcsec = max_set_diff * 206265.0
+                obs.max_direction_diff_across_sets_arcsec = max_set_diff_arcsec
+                report.add_item(ComplianceItem(
+                    name=f"站{sn}_测回间角值较差",
+                    computed=max_set_diff_arcsec,
+                    limit=limit_set,
+                    passed=max_set_diff_arcsec <= limit_set,
+                    message=(f"max|βi-βj| = {max_set_diff_arcsec:.2f}\" "
+                             f"≤ {limit_set:.1f}\""),
+                    station=sn,
+                ))
+        else:
+            # 方向观测法: 方向值跨测回较差
+            dir_diff = _compute_direction_diff_across_sets(obs)
+            if dir_diff is not None and limit_set is not None:
+                obs.max_direction_diff_across_sets_arcsec = dir_diff
+                report.add_item(ComplianceItem(
+                    name=f"站{sn}_方向值跨测回较差",
+                    computed=dir_diff,
+                    limit=limit_set,
+                    passed=dir_diff <= limit_set,
+                    message=(f"max差 = {dir_diff:.2f}\" "
+                             f"≤ {limit_set:.1f}\""),
+                    station=sn,
+                ))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -325,7 +439,7 @@ def check_traversing_compliance(
 
     流程:
         1. 调用正向验证器填充计算字段
-        2. 按等级和仪器等级选取限差参数
+        2. 按等级、观测方法和仪器等级选取限差参数
         3. 逐项比较计算值与限差
         4. 汇总报告
 
@@ -341,8 +455,15 @@ def check_traversing_compliance(
 
     grade = workbook.grade
     inst_grade = workbook.instrument_grade
+    obs_method = workbook.angle_observation_method
     inst_key = _get_instrument_key(inst_grade)
-    limits = _TRAVERSING_LIMITS.get(grade, _TRAVERSING_LIMITS[TraverseGrade.GRADE_1])
+
+    # 按等级选取限差字典
+    grade_limits = _TRAVERSING_LIMITS.get(grade, _TRAVERSING_LIMITS[TraverseGrade.GRADE_1])
+
+    # 按观测方法选取限差子字典
+    # 若指定方法不存在, 回退到方向观测法
+    limits = grade_limits.get(obs_method, grade_limits.get(AngleObservationMethod.DIRECTION, {}))
 
     report = TraversingComplianceReport(grade=grade)
 

@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.models.common import (
-    TraverseGrade, InstrumentGrade, AngleDefinition,
+    TraverseGrade, InstrumentGrade, AngleDefinition, AngleObservationMethod,
 )
 from src.models.traversing import DistanceReading
 from src.generators.traversing_generator import generate_traversing_workbook
@@ -291,3 +291,184 @@ class TestTraversingReportStructure:
         # 2 stations → 2 items (if diff > 0) or 0 items (if diff = 0)
         # 关键: 检核器不报错, 报告正常生成
         assert report.passed
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 测回法合规 (阶段九新增)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestMeasurementMethodCompliance:
+    """测回法合规检核: 半测回较差 9", 测回间角值较差 10"""
+
+    def _make_measurement_wb(self, **kw):
+        pts = _make_grade1_points()
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+        return generate_traversing_workbook(
+            points=pts,
+            start_azimuth=az_start,
+            end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1,
+            num_angle_sets=2,
+            angle_observation_method=AngleObservationMethod.MEASUREMENT,
+            **kw,
+        )
+
+    def test_measurement_method_compliance(self):
+        """测回法基本合规"""
+        wb = self._make_measurement_wb(seed=42)
+        assert wb.angle_observation_method == AngleObservationMethod.MEASUREMENT
+        report = check_traversing_compliance(wb)
+        assert report.passed, (
+            f"测回法合规未通过: " +
+            "; ".join(
+                f"{i.name}={i.computed:.2f}>{i.limit:.2f}"
+                for i in report.items if not i.passed
+            )
+        )
+
+    def test_half_set_limit_9arcsec(self):
+        """测回法半测回较差限差为 9", 非 12"""
+        wb = self._make_measurement_wb(seed=42)
+        report = check_traversing_compliance(wb)
+        half_set_items = [i for i in report.items if "半测回较差" in i.name]
+        assert len(half_set_items) > 0
+        for item in half_set_items:
+            assert item.limit == 9.0, (
+                f"测回法半测回较差应使用 9\" 限差, 实际 {item.limit}"
+            )
+
+    def test_measurement_set_diff_10arcsec(self):
+        """测回法测回间角值较差限差为 10"""
+        wb = self._make_measurement_wb(seed=42)
+        report = check_traversing_compliance(wb)
+        set_diff_items = [i for i in report.items if "测回间角值较差" in i.name]
+        assert len(set_diff_items) > 0, "应有测回间角值较差检核项"
+        for item in set_diff_items:
+            assert item.limit == 10.0, (
+                f"测回间角值较差应使用 10\" 限差, 实际 {item.limit}"
+            )
+
+    def test_no_direction_diff_items(self):
+        """测回法不产生方向值跨测回较差检核项"""
+        wb = self._make_measurement_wb(seed=42)
+        report = check_traversing_compliance(wb)
+        dir_items = [i for i in report.items if "方向值跨测回" in i.name]
+        assert len(dir_items) == 0, "测回法不应有方向值跨测回较差"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 观测方法传播测试 (阶段九新增)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestObservationMethodPropagation:
+    """验证 angle_observation_method 通过生成器和合规检核正确传播"""
+
+    def test_default_is_direction(self):
+        """默认应为方向观测法"""
+        pts = _make_grade1_points()
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1, num_angle_sets=2, seed=42,
+        )
+        assert wb.angle_observation_method == AngleObservationMethod.DIRECTION
+
+    def test_grade2_measurement(self):
+        """二级导线测回法"""
+        pts = [
+            ("K1", 500.0, 500.0),
+            ("T1", 600.0, 550.0),
+            ("K2", 700.0, 500.0),
+        ]
+        az_start = _azimuth(500, 500, 600, 550)
+        az_end = _azimuth(600, 550, 700, 500)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_2, num_angle_sets=2,
+            angle_observation_method=AngleObservationMethod.MEASUREMENT,
+            seed=0,  # seed=77 的扰动超 9" 限差
+        )
+        assert wb.angle_observation_method == AngleObservationMethod.MEASUREMENT
+        report = check_traversing_compliance(wb)
+        assert report.passed, "二级导线测回法合规未通过"
+
+    def test_root_measurement(self):
+        """图根导线测回法"""
+        pts = [
+            ("G1", 0.0, 0.0),
+            ("R1", 50.0, 30.0),
+            ("G2", 100.0, 10.0),
+        ]
+        az_start = _azimuth(0, 0, 50, 30)
+        az_end = _azimuth(50, 30, 100, 10)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.ROOT, num_angle_sets=2,
+            angle_observation_method=AngleObservationMethod.MEASUREMENT,
+            seed=123,
+        )
+        assert wb.angle_observation_method == AngleObservationMethod.MEASUREMENT
+        report = check_traversing_compliance(wb)
+        assert report.passed, "图根导线测回法合规未通过"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 测回法负向测试 (阶段九新增)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestMeasurementMethodNegative:
+    """测回法: 构造超限数据验证 9"/10" 限差能正确拦截"""
+
+    def test_half_set_diff_exceeds_9arcsec(self):
+        """测回法半测回较差超 9" 限差"""
+        pts = _make_grade1_points()
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1, num_angle_sets=2,
+            angle_observation_method=AngleObservationMethod.MEASUREMENT,
+            seed=42,
+        )
+        # 给第一站第一测回后视 L 加 15" 偏移, 使半测回较差超过 9"
+        obs = wb.angle_observations[0]
+        aset = obs.sets[0]
+        for dr in aset.directions:
+            if dr.target == obs.backsight_target and dr.face.value == "L":
+                dr.reading_rad += 15.0 / 206265.0
+                break
+
+        report = check_traversing_compliance(wb)
+        half_fails = [i for i in report.items if not i.passed and "半测回较差" in i.name]
+        assert len(half_fails) >= 1, "应检测到半测回较差超 9\""
+        for item in half_fails:
+            assert item.limit == 9.0, "限差应为 9\""
+        assert not report.passed
+
+    def test_set_diff_exceeds_10arcsec(self):
+        """测回法测回间角值较差超 10" 限差"""
+        pts = _make_grade1_points()
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1, num_angle_sets=2,
+            angle_observation_method=AngleObservationMethod.MEASUREMENT,
+            seed=42,
+        )
+        # 给第一站第二测回前视的 L 和 R 各加 12" 偏移
+        # 使得测回间角值较差 = 12" > 10" 限差
+        obs = wb.angle_observations[0]
+        aset = obs.sets[1]
+        for dr in aset.directions:
+            if dr.target == obs.foresight_target:
+                dr.reading_rad += 12.0 / 206265.0
+
+        report = check_traversing_compliance(wb)
+        set_fails = [i for i in report.items if not i.passed and "测回间角值较差" in i.name]
+        assert len(set_fails) >= 1, "应检测到测回间角值较差超 10\""
+        for item in set_fails:
+            assert item.limit == 10.0, "限差应为 10\""
+        assert not report.passed

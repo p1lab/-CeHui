@@ -279,3 +279,137 @@ class TestMetadata:
         assert gm.random_seed == 42
         assert gm.angle_sigma_arcsec == 0.5
         assert gm.distance_sigma_mm == 0.5
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段十：测距多测回 + 高度参数化
+# ──────────────────────────────────────────────────────────────────────
+
+class TestDistanceMultipleSets:
+    """测距多测回生成与验证"""
+
+    def test_default_2_distance_sets(self):
+        """默认应生成 2 个测回"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, seed=42,
+        )
+        for edge in wb.distance_observations:
+            assert len(edge.forward_sets) == 2, f"往测应有2测回, 实际{len(edge.forward_sets)}"
+            assert len(edge.backward_sets) == 2, f"返测应有2测回, 实际{len(edge.backward_sets)}"
+
+    def test_custom_1_distance_set(self):
+        """指定1测回应生成1测回"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, num_distance_sets=1, seed=42,
+        )
+        for edge in wb.distance_observations:
+            assert len(edge.forward_sets) == 1
+            assert len(edge.backward_sets) == 1
+
+    def test_3_distance_sets(self):
+        """3测回"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, num_distance_sets=3, seed=42,
+        )
+        for edge in wb.distance_observations:
+            assert len(edge.forward_sets) == 3
+            assert len(edge.backward_sets) == 3
+
+    def test_multi_set_compliance(self):
+        """多测回数据应通过合规检核"""
+        from src.checkers.traversing_compliance import check_traversing_compliance
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, num_distance_sets=2, seed=42,
+        )
+        report = check_traversing_compliance(wb)
+        assert report.passed, "多测回应通过合规检核"
+
+
+class TestInstrumentPrismHeights:
+    """仪器高/棱镜高参数化"""
+
+    def test_default_heights(self):
+        """默认仪器高1.50m, 棱镜高1.20m"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, seed=42,
+        )
+        for edge in wb.distance_observations:
+            assert edge.instrument_height_m == 1.50
+            assert edge.prism_height_m == 1.20
+
+    def test_custom_default_heights(self):
+        """自定义默认高度"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1,
+            default_instrument_height_m=1.65,
+            default_prism_height_m=1.30,
+            seed=42,
+        )
+        for edge in wb.distance_observations:
+            assert edge.instrument_height_m == 1.65
+            assert edge.prism_height_m == 1.30
+
+    def test_per_point_heights(self):
+        """按点名指定不同高度"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1,
+            instrument_heights={"A": 1.55, "P1": 1.60},
+            prism_heights={"A": 1.25, "P1": 1.35},
+            seed=42,
+        )
+        # A→P1 边: from_point=A, 应使用 A 的高度
+        edge_ap = [e for e in wb.distance_observations if e.from_point == "A"][0]
+        assert edge_ap.instrument_height_m == 1.55
+        assert edge_ap.prism_height_m == 1.25
+
+        # P1→B 边: from_point=P1, 应使用 P1 的高度
+        edge_pb = [e for e in wb.distance_observations if e.from_point == "P1"][0]
+        assert edge_pb.instrument_height_m == 1.60
+        assert edge_pb.prism_height_m == 1.35
+
+    def test_per_point_heights_with_default_fallback(self):
+        """指定部分点高度, 其余回退到默认"""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("B", 1200, 1100)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1,
+            instrument_heights={"P1": 1.60},
+            default_instrument_height_m=1.50,
+            default_prism_height_m=1.20,
+            seed=42,
+        )
+        edge_ap = [e for e in wb.distance_observations if e.from_point == "A"][0]
+        assert edge_ap.instrument_height_m == 1.50  # 回退到默认
+
+        edge_pb = [e for e in wb.distance_observations if e.from_point == "P1"][0]
+        assert edge_pb.instrument_height_m == 1.60  # 使用指定值

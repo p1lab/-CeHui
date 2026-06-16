@@ -18,7 +18,7 @@ from src.models.leveling import (
 )
 from src.generators.leveling_generator import generate_leveling_workbook
 from src.checkers.leveling_compliance import (
-    check_leveling_compliance, LevelingComplianceReport,
+    check_leveling_compliance, LevelingComplianceReport, _LEVELING_LIMITS,
 )
 
 
@@ -280,3 +280,67 @@ class TestReportStructure:
         section = wb.sections[0]
         assert section.closure_limit_mm is not None
         assert section.closure_limit_mm > 0
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 二等水准基辅限差测试 (阶段九新增)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestGrade2BaseAuxLimits:
+    """二等水准基辅分划限差: 数字 0.4/0.6mm vs 光学 0.5/0.7mm"""
+
+    def test_digital_limits_in_config(self):
+        """配置中应包含数字水准仪限差 0.4/0.6mm"""
+        g2 = _LEVELING_LIMITS[LevelingGrade.GRADE_2]
+        assert g2["digital"]["base_aux_reading_diff_mm"] == 0.4
+        assert g2["digital"]["base_aux_height_diff_mm"] == 0.6
+
+    def test_optical_limits_in_config(self):
+        """配置中应包含光学水准仪限差 0.5/0.7mm"""
+        g2 = _LEVELING_LIMITS[LevelingGrade.GRADE_2]
+        assert g2["optical"]["base_aux_reading_diff_mm"] == 0.5
+        assert g2["optical"]["base_aux_height_diff_mm"] == 0.7
+
+    def test_default_is_digital(self):
+        """默认限差应使用数字水准仪值 (0.4/0.6mm)"""
+        g2 = _LEVELING_LIMITS[LevelingGrade.GRADE_2]
+        assert g2["base_aux_reading_diff_mm"] == 0.4
+        assert g2["base_aux_height_diff_mm"] == 0.6
+
+    def test_digital_compliance(self):
+        """使用数字水准仪限差(默认)生成数据应合规"""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.200, 0.5)
+        rod_back = RodSpec("No.1", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        rod_fore = RodSpec("No.2", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=5, rod_back=rod_back, rod_fore=rod_fore,
+            seed=42,
+        )
+        report = check_leveling_compliance(wb)
+        assert report.passed, (
+            f"数字限差合规未通过: " +
+            "; ".join(
+                f"{i.name}={i.computed:.4f}>{i.limit:.4f}"
+                for i in report.items if not i.passed
+            )
+        )
+
+    def test_base_aux_items_use_digital_limit(self):
+        """基辅检核项应使用数字水准仪限差"""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.200, 0.5)
+        rod_back = RodSpec("No.1", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        rod_fore = RodSpec("No.2", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=3, rod_back=rod_back, rod_fore=rod_fore,
+            seed=42,
+        )
+        report = check_leveling_compliance(wb)
+        ba_items = [i for i in report.items if "基辅" in i.name]
+        assert len(ba_items) > 0
+        for item in ba_items:
+            if "读数差" in item.name:
+                assert item.limit == 0.4, f"基辅读数差限差应为0.4mm, 实际{item.limit}"
+            elif "高差" in item.name:
+                assert item.limit == 0.6, f"基辅高差之差限差应为0.6mm, 实际{item.limit}"

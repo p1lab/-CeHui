@@ -9,7 +9,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -56,6 +56,12 @@ class AngleDefinition(str, Enum):
     RIGHT_ANGLE = "right_angle"   # 右角: beta = alpha_bwd - alpha_fwd + pi
 
 
+class AngleObservationMethod(str, Enum):
+    """水平角观测方法 (影响限差选取)"""
+    DIRECTION    = "direction"      # 方向观测法 (方向数 >= 3, 含归零)
+    MEASUREMENT  = "measurement"    # 测回法 (仅前后两方向, 无归零)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 通用元数据
 # ──────────────────────────────────────────────────────────────────────
@@ -83,12 +89,17 @@ class SurveyMetadata:
 class RouteInfo:
     """
     水准路线信息.
+
+    intermediate_points: 必须经过的中间已知点 (如导线点),
+        生成器会在这些点间自动加设转点 (因视距限制).
+        格式: [(点名, 高程), ...]
     """
     start_point_name: str       # 起点名
     start_point_height: float   # 起点已知高程 (m, 正常高)
     end_point_name: str         # 终点名
     end_point_height: float     # 终点已知高程 (m, 正常高)
     total_length_km: float = 0.0  # 路线总长 (km), 用于闭合差限差计算
+    intermediate_points: Optional[List[Tuple[str, float]]] = None
 
 
 @dataclass

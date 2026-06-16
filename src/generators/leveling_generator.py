@@ -26,7 +26,7 @@ from ..models.common import (
 from ..models.leveling import (
     RodSpec, LevelingReading, LevelingStation,
     ExtraLevelingStation, LevelingSection, ExtraLevelingSection,
-    LevelingWorkbook,
+    LevelingWorkbook, ObservationSequence,
 )
 from ._utils import truncated_normal, mm_to_m, round_reading
 
@@ -364,6 +364,9 @@ def generate_leveling_workbook(
     section_id: str = "S1",
     seed: Optional[int] = None,
     truncation_k: float = 3.0,
+    round_trip: bool = False,
+    return_section_id: str = "S2",
+    observation_sequence: str = "alternate",
 ) -> LevelingWorkbook:
     """
     从 RTK 高程真值逆向生成水准观测手簿.
@@ -377,6 +380,9 @@ def generate_leveling_workbook(
         section_id: 测段编号
         seed: 随机种子 (None=不固定)
         truncation_k: 截断系数 (默认 3.0)
+        round_trip: 是否生成往返观测 (二等水准)
+        return_section_id: 返测测段编号
+        observation_sequence: "alternate"=奇偶站交替, "uniform"=统一顺序
 
     返回:
         LevelingWorkbook (可通过 validate_leveling_workbook 验证)
@@ -405,50 +411,272 @@ def generate_leveling_workbook(
             instrument_serial="SIM-001",
         )
 
-    # ── 构造点序列 ──
-    n = num_stations
-    dh_total = route.end_point_height - route.start_point_height
-    point_names = [route.start_point_name]
-    for i in range(1, n):
-        point_names.append(f"TP.{i}")
-    point_names.append(route.end_point_name)
-
-    # 各站高程 (线性插值)
-    heights = [route.start_point_height]
-    for i in range(1, n + 1):
-        heights.append(
-            route.start_point_height + dh_total * i / n
-        )
-
-    # 分配高差 (总和精确 = dh_total)
-    height_diffs = _distribute_height_diffs(dh_total, n, rng)
-
-    # ── 生成各站 ──
     is_extra = (grade == LevelingGrade.EXTRA)
 
+    # ── 生成往测 ──
+    outbound_section, outbound_stations_raw = _generate_single_section(
+        route=route, grade=grade, num_stations=num_stations,
+        rod_back=rod_back, rod_fore=rod_fore,
+        metadata=metadata, section_id=section_id,
+        sigma_m=sigma_m, reading_dp=reading_dp, params=params, rng=rng,
+        is_extra=is_extra,
+        observation_sequence_mode=observation_sequence,
+        is_outbound=True,
+    )
+
+    sections = [outbound_section]
+    extra_sections = []
+
+    # ── 生成返测 ──
+    if round_trip and not is_extra:
+        # 反转中间点顺序 (返测路线反向)
+        return_intermediates = None
+        if route.intermediate_points:
+            return_intermediates = list(reversed(route.intermediate_points))
+
+        return_route = RouteInfo(
+            start_point_name=route.end_point_name,
+            start_point_height=route.end_point_height,
+            end_point_name=route.start_point_name,
+            end_point_height=route.start_point_height,
+            total_length_km=route.total_length_km,
+            intermediate_points=return_intermediates,
+        )
+        return_section, return_stations_raw = _generate_single_section(
+            route=return_route, grade=grade, num_stations=num_stations,
+            rod_back=rod_back, rod_fore=rod_fore,
+            metadata=metadata, section_id=return_section_id,
+            sigma_m=sigma_m, reading_dp=reading_dp, params=params, rng=rng,
+            is_extra=False,
+            observation_sequence_mode=observation_sequence,
+            is_outbound=False,
+        )
+        sections.append(return_section)
+
+    # ── 构造 Workbook ──
+    if is_extra:
+        extra_sections = sections
+        sections = []
+
+    workbook = LevelingWorkbook(
+        grade=grade,
+        sections=sections,
+        extra_sections=extra_sections,
+        is_round_trip=round_trip and not is_extra,
+        generation_metadata=GenerationMetadata(
+            target_grade=grade.value,
+            random_seed=seed,
+            truncation_k=truncation_k,
+            leveling_sigma_mm=params["sigma_mm"],
+        ),
+    )
+
+    # ── 往返测高差不符值 ──
+    if workbook.is_round_trip and len(sections) == 2:
+        h_outbound = sections[0].sum_height_diff_m or 0.0
+        h_return = sections[1].sum_height_diff_m or 0.0
+        # 往测高差 + 返测高差，理论为 0 (h_往 = -(h_返))
+        discrepancy_mm = abs(h_outbound + h_return) * 1000.0
+        L_km = route.total_length_km or 1.0
+        limit_mm = 4.0 * math.sqrt(L_km)  # 二等水准限差 4√L
+        workbook.round_trip_discrepancy_mm = discrepancy_mm
+        workbook.round_trip_limit_mm = limit_mm
+        workbook.round_trip_passed = discrepancy_mm <= limit_mm
+
+    return workbook
+
+
+def _build_waypoints_and_heights(
+    route: RouteInfo,
+    num_stations: int,
+    rng: np.random.Generator,
+) -> Tuple[List[str], List[float]]:
+    """
+    根据 RouteInfo 构建路线点序列和高程序列.
+
+    - 无 intermediate_points: 行为不变 (起→TP.1→…→TP.{n-1}→终)
+    - 有 intermediate_points: 起→TP.段序号.1→…→中间点→TP.段序号.1→…→终,
+      在相邻控制点间自动插入转点, 并标记控制点.
+
+    返回:
+        point_names: 长度 = num_stations + 1
+        heights: 长度 = num_stations + 1
+    """
+    dh_total = route.end_point_height - route.start_point_height
+
+    if route.intermediate_points is None or len(route.intermediate_points) == 0:
+        # 原有逻辑
+        point_names = [route.start_point_name]
+        for i in range(1, num_stations):
+            point_names.append(f"TP.{i}")
+        point_names.append(route.end_point_name)
+
+        heights = [route.start_point_height]
+        for i in range(1, num_stations + 1):
+            heights.append(route.start_point_height + dh_total * i / num_stations)
+        return point_names, heights
+
+    # 有中间控制点: 将路线分为 segments
+    control_points = [(route.start_point_name, route.start_point_height)]
+    control_points.extend(route.intermediate_points)
+    control_points.append((route.end_point_name, route.end_point_height))
+
+    num_segments = len(control_points) - 1
+    # 按段分配测站数: 按高差比例分配, 不足时每段至少1站
+    seg_dh = []
+    for i in range(num_segments):
+        seg_dh.append(control_points[i + 1][1] - control_points[i][1])
+
+    total_abs_dh = sum(abs(d) for d in seg_dh) or 1.0
+    seg_stations = []
+    remaining = num_stations
+    for i in range(num_segments):
+        if i == num_segments - 1:
+            seg_stations.append(remaining)
+        else:
+            n_seg = max(1, round(num_stations * abs(seg_dh[i]) / total_abs_dh))
+            n_seg = min(n_seg, remaining - (num_segments - 1 - i))
+            n_seg = max(1, n_seg)
+            seg_stations.append(n_seg)
+            remaining -= n_seg
+
+    point_names = []
+    heights = []
+    global_station_offset = 0
+
+    for seg_idx in range(num_segments):
+        cp_start_name, cp_start_h = control_points[seg_idx]
+        cp_end_name, cp_end_h = control_points[seg_idx + 1]
+        n_seg = seg_stations[seg_idx]
+        seg_dh_val = cp_end_h - cp_start_h
+
+        # 段内起点 (非首段时跳过, 因为是上一段的终点)
+        if seg_idx == 0:
+            point_names.append(cp_start_name)
+            heights.append(cp_start_h)
+
+        # 段内转点 (n_seg 个测站产生 n_seg-1 个中间点 + 终点)
+        for j in range(1, n_seg):
+            tp_name = f"TP.{seg_idx + 1}.{j}"
+            point_names.append(tp_name)
+            heights.append(cp_start_h + seg_dh_val * j / n_seg)
+
+        # 段终点 (控制点)
+        point_names.append(cp_end_name)
+        heights.append(cp_end_h)
+        global_station_offset += n_seg
+
+    return point_names, heights
+
+
+def _build_point_type_map(point_names: List[str], route: RouteInfo) -> dict:
+    """
+    构建点号→点类型的映射.
+
+    控制点: start, end, intermediate_points 中的点 → "control"
+    转点: TP.x.y 格式 → "turning"
+    其他: None
+    """
+    control_names = {route.start_point_name, route.end_point_name}
+    if route.intermediate_points:
+        for name, _ in route.intermediate_points:
+            control_names.add(name)
+
+    type_map = {}
+    for name in point_names:
+        if name in control_names:
+            type_map[name] = "control"
+        elif name.startswith("TP."):
+            type_map[name] = "turning"
+    return type_map
+
+
+def _generate_single_section(
+    route: RouteInfo,
+    grade: LevelingGrade,
+    num_stations: int,
+    rod_back: RodSpec,
+    rod_fore: RodSpec,
+    metadata: SurveyMetadata,
+    section_id: str,
+    sigma_m: float,
+    reading_dp: int,
+    params: dict,
+    rng: np.random.Generator,
+    is_extra: bool,
+    observation_sequence_mode: str = "uniform",
+    is_outbound: bool = True,
+):
+    """
+    生成单个测段 (往测或返测).
+
+    返回: (LevelingSection, raw_station_data_list)
+    """
+    n = num_stations
+    dh_total = route.end_point_height - route.start_point_height
+
+    # 构建路线点序列和高程序列 (支持 intermediate_points)
+    point_names, heights = _build_waypoints_and_heights(route, n, rng)
+
+    # 构建点类型映射
+    point_type_map = _build_point_type_map(point_names, route)
+
+    # 各站精确高差: 从高程序列直接计算 (保证经过中间控制点)
+    exact_height_diffs = [heights[i + 1] - heights[i] for i in range(n)]
+
+    # 随机微扰高差 (保持总和精确 = dh_total)
+    height_diffs = _distribute_height_diffs(dh_total, n, rng)
+
+    # 有中间控制点时: 使用精确高差 (保证经过控制点的高程正确)
+    # 无中间控制点时: 使用随机分配的高差 (原有行为)
+    if route.intermediate_points and len(route.intermediate_points) > 0:
+        # 精确高差保证控制点高程, 但需要末站校正以消除累积浮点误差
+        use_height_diffs = exact_height_diffs
+    else:
+        use_height_diffs = height_diffs
+
+    # ── 生成各站 ──
     station_data_list = []
     for i in range(n):
         if is_extra:
             sd = _gen_extra_station(
                 i + 1, point_names[i], point_names[i + 1],
-                height_diffs[i], heights[i], heights[i + 1],
+                use_height_diffs[i], heights[i], heights[i + 1],
                 sigma_m, reading_dp, rng,
             )
         elif rod_back.rod_type == RodType.INVAR_BASIC_AUX:
             sd = _gen_invar_station(
                 i + 1, point_names[i], point_names[i + 1],
-                height_diffs[i], heights[i], heights[i + 1],
+                use_height_diffs[i], heights[i], heights[i + 1],
                 sigma_m, reading_dp, params, rng,
                 rod_back.c_aux_m or 3.0155,
             )
         else:  # DOUBLE_FACE
             sd = _gen_double_face_station(
                 i + 1, point_names[i], point_names[i + 1],
-                height_diffs[i], heights[i], heights[i + 1],
+                use_height_diffs[i], heights[i], heights[i + 1],
                 sigma_m, reading_dp, params, rng,
                 rod_back.k_value_m or 4.687,
                 rod_fore.k_value_m or 4.787,
             )
+
+        # ── 设置点类型 (前视点类型) ──
+        fore_pt = point_names[i + 1]
+        sd["point_type"] = point_type_map.get(fore_pt)
+
+        # ── 设置观测顺序 (二等水准奇偶站交替) ──
+        if observation_sequence_mode == "alternate" and not is_extra:
+            is_odd = ((i + 1) % 2 == 1)
+            if is_outbound:
+                seq = (ObservationSequence.BACK_FORE_FORE_BACK if is_odd
+                       else ObservationSequence.FORE_BACK_BACK_FORE)
+            else:
+                seq = (ObservationSequence.FORE_BACK_BACK_FORE if is_odd
+                       else ObservationSequence.BACK_FORE_FORE_BACK)
+            sd["observation_sequence"] = seq
+        elif observation_sequence_mode == "uniform" and not is_extra:
+            sd["observation_sequence"] = ObservationSequence.BACK_FORE_FORE_BACK
+
         station_data_list.append(sd)
 
     # ── 闭合差校正 (末站前视调整) ──
@@ -488,16 +716,6 @@ def generate_leveling_workbook(
             rod=rod_back,
             stations=stations,
         )
-        workbook = LevelingWorkbook(
-            grade=grade,
-            extra_sections=[section],
-            generation_metadata=GenerationMetadata(
-                target_grade=grade.value,
-                random_seed=seed,
-                truncation_k=truncation_k,
-                leveling_sigma_mm=params["sigma_mm"],
-            ),
-        )
     else:
         stations = [
             LevelingStation(**{k: v for k, v in sd.items()
@@ -513,15 +731,5 @@ def generate_leveling_workbook(
             rod_fore=rod_fore,
             stations=stations,
         )
-        workbook = LevelingWorkbook(
-            grade=grade,
-            sections=[section],
-            generation_metadata=GenerationMetadata(
-                target_grade=grade.value,
-                random_seed=seed,
-                truncation_k=truncation_k,
-                leveling_sigma_mm=params["sigma_mm"],
-            ),
-        )
 
-    return workbook
+    return section, station_data_list

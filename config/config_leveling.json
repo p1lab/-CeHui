@@ -5,12 +5,14 @@
     "unit_convention": "SI单位(米/弧度)为主, 限差值标注原始单位",
     "status": "待人工复核S级规范原文"
   },
-
   "grade_2": {
     "_label": "二等水准测量",
     "_norm": "GB/T 12897-2006",
     "instrument": {
-      "type": ["DS05", "DS1"],
+      "type": [
+        "DS05",
+        "DS1"
+      ],
       "auto_level_compensator_error_arcsec": 0.2,
       "i_angle_limit_arcsec": 15.0
     },
@@ -19,7 +21,7 @@
       "material": "因瓦合金",
       "length_m": 3.0,
       "meter_interval_deviation_mm": 0.15,
-      "line_type_meter_interval_deviation_mm": 0.10,
+      "line_type_meter_interval_deviation_mm": 0.1,
       "base_aux_constant_diff_m": 3.0155
     },
     "sight": {
@@ -30,8 +32,17 @@
       "recommended_sight_height_m": 0.5
     },
     "reading_check": {
-      "base_aux_reading_diff_mm": 0.5,
-      "base_aux_height_diff_mm": 0.7
+      "digital": {
+        "base_aux_reading_diff_mm": 0.4,
+        "base_aux_height_diff_mm": 0.6
+      },
+      "optical": {
+        "base_aux_reading_diff_mm": 0.5,
+        "base_aux_height_diff_mm": 0.7
+      },
+      "base_aux_reading_diff_mm": 0.4,
+      "base_aux_height_diff_mm": 0.6,
+      "_note": "数字/光学水准仪限差不同, 默认取数字水准仪值"
     },
     "closure": {
       "national_grade_mm": "4 * sqrt(L_km)",
@@ -41,7 +52,7 @@
       "engineering_mountain_mm": "3.5 * sqrt(n_stations)",
       "engineering_mountain_coefficient": 3.5,
       "deformation_monitoring_mm": "0.30 * sqrt(n_stations)",
-      "deformation_monitoring_coefficient": 0.30
+      "deformation_monitoring_coefficient": 0.3
     },
     "precision": {
       "per_station_height_diff_mean_error_mm": 0.15,
@@ -54,7 +65,7 @@
     "observation_program": {
       "stations_per_section": "even",
       "outbound_return_time": "different_periods",
-      "same_period_max_station_ratio": 0.30,
+      "same_period_max_station_ratio": 0.3,
       "turnplate_min_mass_kg": 5.0,
       "stake_min_mass_kg": 1.5,
       "stake_min_length_m": 0.2,
@@ -62,25 +73,35 @@
       "no_refocus_at_same_station": true
     },
     "simulation": {
-      "sight_distance_range_m": [20.0, 50.0],
-      "distance_diff_range_m": [-0.8, 0.8],
+      "sight_distance_range_m": [
+        20.0,
+        50.0
+      ],
+      "distance_diff_range_m": [
+        -0.8,
+        0.8
+      ],
       "reading_perturbation_sigma_mm": 0.05,
       "base_aux_perturbation_sigma_mm": 0.15
     }
   },
-
   "grade_3": {
     "_label": "三等水准测量",
     "_norm": "GB/T 12898-2009",
     "instrument": {
-      "type": ["DS3"],
+      "type": [
+        "DS3"
+      ],
       "auto_level": true
     },
     "rod": {
       "type": "double_face_wooden",
       "material": "木质双面尺",
       "length_m": 3.0,
-      "k_values_m": [4.687, 4.787]
+      "k_values_m": [
+        4.687,
+        4.787
+      ]
     },
     "sight": {
       "max_length_m": 75.0,
@@ -106,25 +127,35 @@
       "sequence_alt": "back_front_front_back"
     },
     "simulation": {
-      "sight_distance_range_m": [20.0, 75.0],
-      "distance_diff_range_m": [-3.0, 3.0],
+      "sight_distance_range_m": [
+        20.0,
+        75.0
+      ],
+      "distance_diff_range_m": [
+        -3.0,
+        3.0
+      ],
       "reading_perturbation_sigma_mm": 0.5,
       "black_red_noise_sigma_mm": 0.4
     }
   },
-
   "grade_4": {
     "_label": "四等水准测量",
     "_norm": "GB/T 12898-2009",
     "instrument": {
-      "type": ["DS3"],
+      "type": [
+        "DS3"
+      ],
       "auto_level": true
     },
     "rod": {
       "type": "double_face_wooden",
       "material": "木质双面尺",
       "length_m": 3.0,
-      "k_values_m": [4.687, 4.787]
+      "k_values_m": [
+        4.687,
+        4.787
+      ]
     },
     "sight": {
       "max_length_m": 100.0,
@@ -150,18 +181,25 @@
       "sequence_alt": "back_front_front_back"
     },
     "simulation": {
-      "sight_distance_range_m": [20.0, 100.0],
-      "distance_diff_range_m": [-3.0, 3.0],
+      "sight_distance_range_m": [
+        20.0,
+        100.0
+      ],
+      "distance_diff_range_m": [
+        -3.0,
+        3.0
+      ],
       "reading_perturbation_sigma_mm": 1.0,
       "black_red_noise_sigma_mm": 0.5
     }
   },
-
   "extra": {
     "_label": "等外/图根水准测量",
     "_norm": "工程测量通用实践",
     "instrument": {
-      "type": ["DS3"]
+      "type": [
+        "DS3"
+      ]
     },
     "rod": {
       "type": "single_face_wooden",
@@ -170,7 +208,7 @@
     },
     "check_method": {
       "type": "instrument_height_change",
-      "min_height_change_m": 0.10,
+      "min_height_change_m": 0.1,
       "height_diff_diff_mm": 5.0
     },
     "closure": {
@@ -182,15 +220,20 @@
       "reading_precision_mm": 1.0
     },
     "simulation": {
-      "reading_range_m": [0.3, 2.5],
+      "reading_range_m": [
+        0.3,
+        2.5
+      ],
       "reading_perturbation_sigma_mm": 2.0
     }
   },
-
   "height_datum": {
     "_description": "高程基准转换控制 (error_propagation.md A6)",
     "input_height_type": "normal_height",
-    "_options": ["ellipsoid_height", "normal_height"],
+    "_options": [
+      "ellipsoid_height",
+      "normal_height"
+    ],
     "conversion_required": false,
     "_conversion_note": "若输入为椭球高, 必须提供高程异常 zeta 进行转换",
     "zeta_constant_assumption": true,
@@ -198,7 +241,6 @@
     "zeta_default_m": null,
     "_zeta_default_note": "null=不提供默认值, 用户必须显式指定或由数据源提供"
   },
-
   "feasibility_check": {
     "_description": "可行性预检参数 (error_propagation.md A7.1)",
     "threshold_multiplier": 3.0,
@@ -208,7 +250,6 @@
       "mandatory_disclaimer": "本数据基于数学真值假设模拟生成, 不代表RTK实测精度可达目标等级"
     }
   },
-
   "constants": {
     "rho_arcsec_per_rad": 206265.0,
     "atmospheric_refraction_coefficient_K": 0.14,

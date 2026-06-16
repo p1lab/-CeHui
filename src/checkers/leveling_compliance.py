@@ -66,8 +66,19 @@ _LEVELING_LIMITS = {
         "max_sight_length_m": 50.0,
         "max_station_distance_diff_m": 1.0,
         "max_cumulative_distance_diff_m": 3.0,
-        "base_aux_reading_diff_mm": 0.5,
-        "base_aux_height_diff_mm": 0.7,
+        # GB/T 12897-2006 表3: 数字水准仪基辅限差
+        "digital": {
+            "base_aux_reading_diff_mm": 0.4,
+            "base_aux_height_diff_mm": 0.6,
+        },
+        # GB/T 12897-2006 表3: 光学水准仪基辅限差
+        "optical": {
+            "base_aux_reading_diff_mm": 0.5,
+            "base_aux_height_diff_mm": 0.7,
+        },
+        # 向后兼容: 默认使用数字水准仪限差
+        "base_aux_reading_diff_mm": 0.4,
+        "base_aux_height_diff_mm": 0.6,
         "closure_coefficient": 4.0,
     },
     LevelingGrade.GRADE_3: {
@@ -299,5 +310,19 @@ def check_leveling_compliance(
     for section in workbook.extra_sections:
         _check_extra_section(section, limits, report)
         _check_closure(section, grade, limits, report)
+
+    # ── 往返测高差不符值 ──
+    if workbook.is_round_trip and workbook.round_trip_discrepancy_mm is not None:
+        report.items.append(ComplianceItem(
+            name="往返测高差不符值",
+            computed=workbook.round_trip_discrepancy_mm,
+            limit=workbook.round_trip_limit_mm or 0.0,
+            passed=workbook.round_trip_passed or False,
+            message=f"|h往+h返| = {workbook.round_trip_discrepancy_mm:.3f} mm "
+                   f"≤ {workbook.round_trip_limit_mm:.1f} mm"
+                   if workbook.round_trip_passed else
+                   f"|h往+h返| = {workbook.round_trip_discrepancy_mm:.3f} mm "
+                   f"> {workbook.round_trip_limit_mm:.1f} mm (超限)",
+        ))
 
     return report

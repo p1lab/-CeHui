@@ -418,6 +418,7 @@ def validate_leveling_workbook(workbook: LevelingWorkbook) -> LevelingValidation
     验证完整水准观测手簿.
 
     对每个测段执行正向验证, 返回验证结果.
+    若 is_round_trip=True, 还计算往返测高差不符值.
     """
     result = LevelingValidationResult()
 
@@ -426,5 +427,28 @@ def validate_leveling_workbook(workbook: LevelingWorkbook) -> LevelingValidation
 
     for section in workbook.extra_sections:
         validate_extra_section(section, result)
+
+    # ── 往返测高差不符值验证 ──
+    if workbook.is_round_trip and len(workbook.sections) == 2:
+        h_outbound = workbook.sections[0].sum_height_diff_m
+        h_return = workbook.sections[1].sum_height_diff_m
+        if h_outbound is not None and h_return is not None:
+            discrepancy_mm = abs(h_outbound + h_return) * 1000.0
+            L_km = (workbook.sections[0].route.total_length_km
+                    or workbook.sections[0].total_distance_km or 1.0)
+            limit_mm = 4.0 * math.sqrt(L_km)
+
+            # 与 workbook 中生成器计算的结果交叉验证
+            if workbook.round_trip_discrepancy_mm is not None:
+                assert abs(discrepancy_mm - workbook.round_trip_discrepancy_mm) < 0.01, \
+                    f"往返测不符值计算不一致: 验证器={discrepancy_mm:.3f}, 生成器={workbook.round_trip_discrepancy_mm:.3f}"
+
+            result.add_check(CheckResult(
+                name="往返测高差不符值",
+                computed=discrepancy_mm,
+                limit=limit_mm,
+                passed=discrepancy_mm <= limit_mm,
+                message=f"|h往+h返| = {discrepancy_mm:.3f} mm, 限差 = {limit_mm:.1f} mm"
+            ))
 
     return result

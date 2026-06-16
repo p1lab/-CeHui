@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from ..models.common import (
-    TraverseGrade, InstrumentGrade, Face, AngleDefinition,
+    TraverseGrade, InstrumentGrade, Face, AngleDefinition, AngleObservationMethod,
     SurveyMetadata, TraverseInfo, GenerationMetadata,
     TRAVERSE_DISTANCE_DECIMAL_PLACES,
 )
@@ -158,6 +158,9 @@ def _gen_edge_distance(
     reading_diff_sigma_m: float,
     distance_dp: int,
     rng: np.random.Generator,
+    num_sets: int = 1,
+    instrument_height_m: float = 1.50,
+    prism_height_m: float = 1.20,
 ) -> EdgeDistanceObservation:
     """
     生成单边距离观测 (往返).
@@ -182,12 +185,12 @@ def _gen_edge_distance(
         edge_name=f"{from_name}-{to_name}",
         from_point=from_name,
         to_point=to_name,
-        instrument_height_m=1.50,
-        prism_height_m=1.20,
+        instrument_height_m=instrument_height_m,
+        prism_height_m=prism_height_m,
         zenith_angle_forward_rad=Z,
         zenith_angle_backward_rad=Z,
-        forward_sets=[make_set(1)],
-        backward_sets=[make_set(1)],
+        forward_sets=[make_set(j + 1) for j in range(num_sets)],
+        backward_sets=[make_set(j + 1) for j in range(num_sets)],
     )
 
 
@@ -303,6 +306,12 @@ def generate_traversing_workbook(
     instrument_grade: InstrumentGrade = InstrumentGrade.SEC_2,
     num_angle_sets: int = 2,
     angle_definition: AngleDefinition = AngleDefinition.LEFT_ANGLE,
+    angle_observation_method: AngleObservationMethod = AngleObservationMethod.DIRECTION,
+    num_distance_sets: int = 2,
+    instrument_heights: Optional[dict] = None,
+    prism_heights: Optional[dict] = None,
+    default_instrument_height_m: float = 1.50,
+    default_prism_height_m: float = 1.20,
     metadata: Optional[SurveyMetadata] = None,
     seed: Optional[int] = None,
 ) -> TraversingWorkbook:
@@ -436,6 +445,11 @@ def generate_traversing_workbook(
         _, x2, y2 = points[i + 1]
         D = _compute_distance(x1, y1, x2, y2)
 
+        # 获取该边的仪器高/棱镜高
+        from_pt = points[i][0]
+        i_h = (instrument_heights or {}).get(from_pt, default_instrument_height_m)
+        p_h = (prism_heights or {}).get(from_pt, default_prism_height_m)
+
         edge = _gen_edge_distance(
             from_name=points[i][0], to_name=points[i + 1][0],
             true_D=D,
@@ -443,6 +457,9 @@ def generate_traversing_workbook(
             reading_diff_sigma_m=reading_diff_sigma_m,
             distance_dp=distance_dp,
             rng=rng,
+            num_sets=num_distance_sets,
+            instrument_height_m=i_h,
+            prism_height_m=p_h,
         )
 
         # 填充 final_distance (validator 会重新计算, 但我们需要用于 computation)
@@ -465,6 +482,7 @@ def generate_traversing_workbook(
     return TraversingWorkbook(
         grade=grade,
         instrument_grade=instrument_grade,
+        angle_observation_method=angle_observation_method,
         metadata=metadata,
         info=info,
         angle_observations=angle_obs,

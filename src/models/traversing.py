@@ -18,7 +18,7 @@ from typing import Optional, List, Dict
 
 from .common import (
     SurveyMetadata, TraverseInfo, TraverseGrade, InstrumentGrade,
-    Face, AngleDefinition, GenerationMetadata,
+    Face, AngleDefinition, AngleObservationMethod, GenerationMetadata,
     TRAVERSE_DISTANCE_DECIMAL_PLACES,
 )
 
@@ -334,6 +334,7 @@ class TraversingWorkbook:
     """
     grade: TraverseGrade
     instrument_grade: InstrumentGrade = InstrumentGrade.SEC_2
+    angle_observation_method: AngleObservationMethod = AngleObservationMethod.DIRECTION
     project_name: str = ""
 
     # 元数据

@@ -8,9 +8,20 @@ from .feasibility import (
     FeasibilityReport,
 )
 
+from .height_datum import (
+    convert_ellipsoid_to_normal,
+    check_height_datum_consistency,
+    HeightDatumItem,
+    HeightDatumReport,
+)
+
 __all__ = [
     "check_leveling_feasibility",
     "check_traversing_feasibility",
     "FeasibilityItem",
     "FeasibilityReport",
+    "convert_ellipsoid_to_normal",
+    "check_height_datum_consistency",
+    "HeightDatumItem",
+    "HeightDatumReport",
 ]

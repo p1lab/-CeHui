@@ -16,11 +16,18 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, List
+from enum import Enum
 
 from .common import (
     SurveyMetadata, RouteInfo, LevelingGrade, RodType, GenerationMetadata,
     LEVELING_READING_DECIMAL_PLACES, LEVELING_HEIGHT_DIFF_DECIMAL_PLACES,
 )
+
+
+class ObservationSequence(str, Enum):
+    """测站观测顺序 (二等水准奇偶站交替)"""
+    BACK_FORE_FORE_BACK = "后前前后"   # 后基→前基→前辅→后辅 (奇数站往测/偶数站返测)
+    FORE_BACK_BACK_FORE = "前后后前"   # 前基→后基→后辅→前辅 (偶数站往测/奇数站返测)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -140,6 +147,12 @@ class LevelingStation:
     black_red_height_diff_diff_mm: Optional[float] = None   # 黑红面高差之差 (mm)
     base_aux_height_diff_diff_mm: Optional[float] = None    # 基辅高差之差 (mm)
 
+    # ── 观测顺序 (二等水准奇偶站交替) ──
+    observation_sequence: Optional[ObservationSequence] = None
+
+    # ── 点类型标记 ──
+    point_type: Optional[str] = None  # "control"=导线/控制点, "turning"=转点
+
 
 # ──────────────────────────────────────────────────────────────────────
 # 等外水准专用: 变动仪高法 (双仪高)
@@ -170,6 +183,9 @@ class ExtraLevelingStation:
     # 检核
     height_diff_diff_mm: Optional[float] = None  # |h1 - h2| (mm), 限差 <= 5mm
     height_diff_mean_m: Optional[float] = None   # (h1 + h2) / 2
+
+    # ── 点类型标记 ──
+    point_type: Optional[str] = None  # "control"=导线/控制点, "turning"=转点
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -245,6 +261,12 @@ class LevelingWorkbook:
 
     # 生成元数据 (逆向生成器填写)
     generation_metadata: Optional[GenerationMetadata] = None
+
+    # ── 往返观测汇总 ──
+    is_round_trip: bool = False                         # 是否往返观测
+    round_trip_discrepancy_mm: Optional[float] = None   # |h_往 + h_返| (mm)
+    round_trip_limit_mm: Optional[float] = None         # 4√L (mm)
+    round_trip_passed: Optional[bool] = None            # 是否合格
 
     # 教学声明 (自动附加)
     teaching_disclaimer: str = (
