@@ -1,0 +1,149 @@
+{
+  "_meta": {
+    "description": "观测程序参数配置: 度盘配置、观测顺序、测回数等程序契约",
+    "source": "GB 50026-2020, GB/T 12897-2006, GB/T 12898-2009",
+    "status": "待人工复核"
+  },
+
+  "degree_plate_config": {
+    "_description": "水平度盘零位配置公式",
+    "formula": "L_0_j = (pi / m) * (j - 1) + offset",
+    "formula_degrees": "L_0_j = (180 / m) * (j - 1) + offset",
+    "offset_arcsec": 150,
+    "offset_radians": 0.000727,
+    "offset_dms": "0°02'30\"",
+    "examples": {
+      "2_sets": {
+        "set_1_dms": "0°02'30\"",
+        "set_1_rad": 0.000727,
+        "set_2_dms": "90°02'30\"",
+        "set_2_rad": 1.571523
+      },
+      "4_sets": {
+        "set_1_dms": "0°02'30\"",
+        "set_2_dms": "45°02'30\"",
+        "set_3_dms": "90°02'30\"",
+        "set_4_dms": "135°02'30\""
+      }
+    }
+  },
+
+  "leveling_observation_sequence": {
+    "_description": "水准测量观测顺序 (按等级)",
+    "grade_2": {
+      "method": "base_aux",
+      "sequence_primary": ["back_basic", "front_basic", "front_aux", "back_aux"],
+      "sequence_name": "后前前后 (基辅分划)",
+      "sequence_alt": ["back_basic", "back_aux", "front_basic", "front_aux"],
+      "sequence_alt_name": "后后前前 (基辅分划)"
+    },
+    "grade_3": {
+      "method": "black_red",
+      "sequence_primary": ["back_black_upper", "back_black_lower", "back_black_mid", "back_red_mid", "front_black_upper", "front_black_lower", "front_black_mid", "front_red_mid"],
+      "sequence_name": "后后前前 (黑红面)"
+    },
+    "grade_4": {
+      "method": "black_red",
+      "sequence_primary": ["back_black_upper", "back_black_lower", "back_black_mid", "back_red_mid", "front_black_upper", "front_black_lower", "front_black_mid", "front_red_mid"],
+      "sequence_name": "后后前前 (黑红面)"
+    },
+    "extra": {
+      "method": "single_face_with_height_change",
+      "sequence_primary": ["back_mid", "front_mid"],
+      "sequence_repeat": "change_instrument_height_ge_10cm_then_repeat",
+      "sequence_name": "变动仪器高法"
+    }
+  },
+
+  "traversing_observation_program": {
+    "_description": "导线测量观测程序",
+    "angle_observation": {
+      "method_selection": {
+        "direction_method_min_directions": 3,
+        "measurement_method_max_directions": 2
+      },
+      "direction_method": {
+        "_description": "方向观测法 (方向数 >= 3)",
+        "procedure": [
+          "盘左: 零方向 -> 顺时针依次照准各方向 -> 归零",
+          "盘右: 零方向 -> 逆时针依次照准各方向 -> 归零"
+        ],
+        "half_set_return_zero_check": true
+      },
+      "measurement_method": {
+        "_description": "测回法 (仅前后两方向)",
+        "procedure": [
+          "盘左: 后视 -> 前视",
+          "盘右: 前视 -> 后视"
+        ]
+      },
+      "angle_definition": {
+        "default": "left_angle",
+        "left_angle_formula": "beta = alpha_forward - alpha_backward + pi",
+        "right_angle_formula": "beta = alpha_backward - alpha_forward + pi",
+        "_note": "必须在项目启动时锁定, 全程不可混用"
+      }
+    },
+    "distance_observation": {
+      "method": "EDM_with_total_station",
+      "readings_per_set": 3,
+      "measurement_direction": "round_trip",
+      "forward_set_count": 1,
+      "backward_set_count": 1,
+      "meteorological_correction": "auto_by_instrument_or_manual",
+      "simultaneous_with_angle": true
+    }
+  },
+
+  "default_simulation_parameters": {
+    "_description": "默认模拟参数 (可被用户覆盖)",
+    "random_seed": null,
+    "_seed_note": "null=不固定种子, 设置整数可复现",
+    "perturbation_distribution": "truncated_normal",
+    "truncation_k": 3.0,
+    "_truncation_note": "截断于 [-k*sigma, k*sigma]",
+
+    "leveling": {
+      "sight_height_method": "random_mid_range",
+      "sight_height_buffer_m": [1.5, 2.5],
+      "_buffer_note": "视线高 = max(H_back, H_fore) + uniform(buffer)",
+      "reading_range_m": [0.3, 2.5],
+      "distance_stadia_constant": 100
+    },
+
+    "traversing": {
+      "default_instrument_grade": "2sec",
+      "default_measurement_sets": 2,
+      "default_angle_definition": "left_angle",
+      "instrument_height_default_m": 1.50,
+      "prism_height_default_m": 1.20,
+      "distance_reading_count": 3
+    }
+  },
+
+  "output_format": {
+    "angle_format": "dms",
+    "angle_example": "123°45'06.5\"",
+    "distance_decimal_places": 4,
+    "leveling_reading_decimal_places": {
+      "grade_2": 4,
+      "grade_3": 3,
+      "grade_4": 3,
+      "extra": 3
+    },
+    "leveling_height_diff_decimal_places": {
+      "grade_2": 5,
+      "grade_3": 4,
+      "grade_4": 4,
+      "extra": 3
+    }
+  },
+
+  "teaching_disclaimer": {
+    "auto_attach": true,
+    "text_zh": "本数据基于RTK坐标模拟生成, 仅供教学使用, 非真实外业观测数据",
+    "text_en": "This data is simulated from RTK coordinates for teaching purposes only",
+    "include_source_precision": true,
+    "include_target_grade": true
+  }
+}

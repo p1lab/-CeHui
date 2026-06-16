@@ -1,0 +1,164 @@
+{
+  "_meta": {
+    "description": "导线测量规范参数配置, 覆盖一级/图根",
+    "source": "GB 50026-2020 (工程测量标准)",
+    "unit_convention": "SI单位(米/弧度)为主, 限差值标注原始单位",
+    "status": "待人工复核S级规范原文"
+  },
+
+  "grade_1": {
+    "_label": "一级导线测量",
+    "_norm": "GB 50026-2020",
+    "geometry": {
+      "max_total_length_km": 4.0,
+      "average_side_length_km": 0.5,
+      "max_adjacent_side_ratio": "1:3",
+      "max_sides_by_length": 8,
+      "short_traverse_threshold_km": 1.33,
+      "short_traverse_absolute_closure_m": 0.13
+    },
+    "instrument": {
+      "grade_options": {
+        "2sec": {
+          "nominal_accuracy_arcsec": 2.0,
+          "measurement_sets": 2
+        },
+        "6sec": {
+          "nominal_accuracy_arcsec": 6.0,
+          "measurement_sets": 4
+        }
+      }
+    },
+    "angular": {
+      "measurement_mean_error_arcsec": 5.0,
+      "azimuth_closure_arcsec": "10 * sqrt(n)",
+      "azimuth_closure_coefficient": 10.0,
+      "checks_2sec_instrument": {
+        "half_set_return_zero_diff_arcsec": 8.0,
+        "one_set_2c_mutual_diff_arcsec": 13.0,
+        "direction_value_diff_across_sets_arcsec": 9.0
+      },
+      "checks_6sec_instrument": {
+        "half_set_return_zero_diff_arcsec": 12.0,
+        "one_set_2c_mutual_diff_arcsec": 18.0,
+        "direction_value_diff_across_sets_arcsec": 12.0
+      },
+      "half_set_diff_arcsec": 12.0,
+      "two_set_diff_arcsec": 12.0
+    },
+    "distance": {
+      "measurement_mean_error_mm": 15.0,
+      "relative_mean_error": "1/30000",
+      "relative_mean_error_denominator": 30000,
+      "readings_per_set": 3,
+      "reading_diff_mm": 5.0,
+      "reading_diff_alt_mm": 10.0,
+      "_reading_diff_note": "5mm与10mm之间存在版本差异, 以GB 50026-2020原文为准",
+      "round_trip_diff_mm": 10.0,
+      "measurement_sets": 1,
+      "precision_decimal_places": 4
+    },
+    "closure": {
+      "full_length_relative_closure": "1/15000",
+      "full_length_relative_closure_denominator": 15000
+    },
+    "centering": {
+      "instrument_centering_error_mm": 2.0,
+      "prism_centering_error_mm": 2.0
+    },
+    "recording": {
+      "angle_precision": "1 decimal (seconds)",
+      "distance_precision": "4 decimal places (0.001 m)",
+      "angle_seconds_immutable": true,
+      "no_serial_erasures": true
+    },
+    "adjustment": {
+      "method": "rigorous",
+      "_note": "一级导线要求严密平差"
+    },
+    "simulation": {
+      "angle_perturbation_sigma_arcsec": 0.5,
+      "distance_perturbation_sigma_mm": 0.5,
+      "_sigma_source": "error_propagation.md A4.2 参考表",
+      "2c_range_arcsec": [-6.5, 6.5],
+      "instrument_height_range_m": [1.2, 1.6],
+      "prism_height_range_m": [1.2, 1.6]
+    }
+  },
+
+  "grade_2": {
+    "_label": "二级导线测量",
+    "_norm": "GB 50026-2020",
+    "_inherits_from": "grade_1",
+    "_inherit_note": "未显式声明的字段继承 grade_1 (geometry, instrument, distance, recording, centering, adjustment)",
+    "angular": {
+      "measurement_mean_error_arcsec": 10.0,
+      "azimuth_closure_arcsec": "16 * sqrt(n)",
+      "azimuth_closure_coefficient": 16.0
+    },
+    "closure": {
+      "full_length_relative_closure": "1/10000",
+      "full_length_relative_closure_denominator": 10000
+    },
+    "simulation": {
+      "angle_perturbation_sigma_arcsec": 2.0,
+      "distance_perturbation_sigma_mm": 2.0,
+      "_sigma_source": "error_propagation.md A4.2 参考表 (三等行)"
+    }
+  },
+
+  "root": {
+    "_label": "图根导线测量",
+    "_norm": "工程测量通用实践",
+    "_inherits_from": "grade_1",
+    "_inherit_note": "未显式声明的字段继承 grade_1",
+    "angular": {
+      "measurement_mean_error_arcsec_range": [20.0, 30.0]
+    },
+    "closure": {
+      "full_length_relative_closure": "1/2000",
+      "full_length_relative_closure_denominator": 2000
+    },
+    "simulation": {
+      "angle_perturbation_sigma_arcsec": 10.0,
+      "distance_perturbation_sigma_mm": 10.0,
+      "_sigma_source": "error_propagation.md A4.2 参考表 (图根行)"
+    }
+  },
+
+  "rtk_reference": {
+    "_label": "RTK精度基准 (数学真值假设下忽略)",
+    "plane_accuracy_cm": [1.0, 3.0],
+    "height_accuracy_cm": [2.0, 5.0],
+    "relative_accuracy": "1 cm + 1 ppm",
+    "baseline_condition": "< 10 km, open environment",
+    "defaults_for_formulas": {
+      "_note": "传播公式 (A2.1, A3.1) 使用的单值默认参数",
+      "sigma_XY_m": 0.02,
+      "sigma_H_m": 0.03,
+      "sigma_XY_note": "取典型范围中值 2cm",
+      "sigma_H_note": "取典型范围中值 3cm"
+    }
+  },
+
+  "feasibility_check": {
+    "_description": "可行性预检参数 (error_propagation.md A7.1-A7.2)",
+    "threshold_multiplier": 3.0,
+    "_threshold_note": "RTK噪声 > 目标精度 * 3 时发出警告",
+    "math_true_value_mode": {
+      "skip_feasibility_check": true,
+      "mandatory_disclaimer": "本数据基于数学真值假设模拟生成, 不代表RTK实测精度可达目标等级"
+    }
+  },
+
+  "constants": {
+    "rho_arcsec_per_rad": 206265.0,
+    "earth_radius_m": 6371000.0,
+    "cos_Z_numerical_guard": 1e-6,
+    "_guard_note": "abs(cos(Z)) < 此阈值时, 禁用斜距-竖直角扰动耦合 (error_propagation.md A5.3)",
+    "flat_distance_epsilon_m": 1e-6,
+    "_epsilon_note": "平距守恒断言 abs(D'-D) < epsilon (error_propagation.md A5.3)",
+    "short_side_curvature_threshold_m": 500.0,
+    "_curvature_note": "边长 < 此值可忽略地球曲率改正 (axiom_traversing.md A3.3)"
+  }
+}
