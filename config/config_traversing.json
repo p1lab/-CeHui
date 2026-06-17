@@ -61,9 +61,7 @@
       "relative_mean_error": "1/30000",
       "relative_mean_error_denominator": 30000,
       "readings_per_set": 3,
-      "reading_diff_mm": 5.0,
-      "reading_diff_alt_mm": 10.0,
-      "_reading_diff_note": "5mm与10mm之间存在版本差异, 以GB 50026-2020原文为准",
+      "reading_diff_mm": 10.0,
       "round_trip_diff_mm": 10.0,
       "measurement_sets": 2,
       "precision_decimal_places": 4

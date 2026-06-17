@@ -20,6 +20,7 @@ from ..models.common import LevelingGrade, RodType
 from ._utils import (
     rad_to_dms, format_meter, format_mm, format_arcsec, format_optional,
     build_disclaimer, build_per_face_direction_values, _TWO_PI,
+    _ARCSEC_PER_RAD,
 )
 
 
@@ -291,6 +292,81 @@ def _leveling_summary(section, is_md: bool) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 水准手簿: 成果计算表 (阶段二十三)
+# ──────────────────────────────────────────────────────────────────────
+
+def _leveling_adjustment_table(wb: LevelingWorkbook, is_md: bool) -> str:
+    """水准成果计算表 (6列标准格式).
+
+    列定义:
+        点名 | 距离(km) | 观测高差(m) | 改正数(mm) | 改正后高差(m) | 高程(m)
+
+    底部辅助计算区: 闭合差、限差、是否合格、每公里改正数.
+    往返测场景附注往返测不符值.
+
+    无平差数据时返回空字符串 (兼容旧数据).
+    """
+    if wb.adjustment is None:
+        return ""
+
+    adj = wb.adjustment
+    headers = [
+        "点名", "距离(km)", "观测高差(m)",
+        "改正数(mm)", "改正后高差(m)", "高程(m)",
+    ]
+    rows = []
+    for rec in adj.records:
+        rows.append([
+            rec.point_name,
+            f"{rec.distance_km:.4f}" if rec.distance_km is not None else "",
+            f"{rec.observed_height_diff_m:.5f}" if rec.observed_height_diff_m is not None else "",
+            f"{rec.correction_mm:.2f}" if rec.correction_mm is not None else "",
+            f"{rec.corrected_height_diff_m:.5f}" if rec.corrected_height_diff_m is not None else "",
+            f"{rec.height_m:.5f}" if rec.height_m is not None else "",
+        ])
+
+    if is_md:
+        table = _render_md_table(headers, rows)
+    else:
+        table = _render_text_table(headers, rows)
+
+    # 辅助计算区
+    aux_lines = []
+    if is_md:
+        aux_lines.append("\n**辅助计算**\n")
+    else:
+        aux_lines.append("\n" + "-" * 40)
+        aux_lines.append("辅助计算")
+        aux_lines.append("-" * 40)
+
+    if adj.closure_error_mm is not None:
+        aux_lines.append(f"闭合差 = {adj.closure_error_mm:.3f} mm")
+    if adj.closure_limit_mm is not None:
+        aux_lines.append(f"限差 = ±{adj.closure_limit_mm:.1f} mm")
+    if adj.passed is not None:
+        aux_lines.append(f"是否合格: {'合格' if adj.passed else '不合格'}")
+    if adj.correction_per_km_mm is not None:
+        aux_lines.append(f"每公里改正数 = {adj.correction_per_km_mm:.3f} mm/km")
+    if adj.total_distance_km is not None:
+        aux_lines.append(f"路线总长 = {adj.total_distance_km:.4f} km")
+
+    # 往返测附注
+    if wb.is_round_trip:
+        if is_md:
+            aux_lines.append("\n*往返测附注*\n")
+        else:
+            aux_lines.append("\n[往返测附注]")
+        if adj.round_trip_discrepancy_mm is not None:
+            aux_lines.append(f"往返测不符值 = {adj.round_trip_discrepancy_mm:.3f} mm")
+        if adj.round_trip_limit_mm is not None:
+            aux_lines.append(f"往返测限差 = ±{adj.round_trip_limit_mm:.1f} mm")
+        if adj.mean_height_diff_m is not None:
+            aux_lines.append(f"往返测中数高差 = {adj.mean_height_diff_m:.5f} m")
+
+    return table + "\n" + "\n".join(aux_lines)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # 导线手簿: 表头区
 # ──────────────────────────────────────────────────────────────────────
 
@@ -430,44 +506,88 @@ def _traversing_distance_table(wb: TraversingWorkbook, is_md: bool) -> str:
 # 导线手簿: 成果计算表
 # ──────────────────────────────────────────────────────────────────────
 
+def _format_angle_correction_arcsec(val_rad: Optional[float]) -> str:
+    """角度改正数: 弧度→角秒字符串, 保留1位小数. None→空."""
+    if val_rad is None:
+        return ""
+    return f"{val_rad * _ARCSEC_PER_RAD:.1f}"  # from _utils
+
+
+def _format_coord_correction_mm(val_m: Optional[float]) -> str:
+    """坐标改正数: 米→毫米字符串, 保留1位小数. None→空."""
+    if val_m is None:
+        return ""
+    return f"{val_m * 1000:.1f}"
+
+
 def _traversing_computation_table(wb: TraversingWorkbook, is_md: bool) -> str:
-    """导线成果计算表."""
+    """导线成果计算表 (14列标准格式).
+
+    列定义:
+        点名行: 点名 | 观测角 | v_beta(") | 改正后角 | 空×6 | X | Y
+        边  行: 空×4 | 方位角 | 距离 | dx | dy | v_x(mm) | v_y(mm) | dx改 | dy改 | 空×2
+
+    角度改正数以角秒显示(1位小数), 坐标改正数以毫米显示(1位小数).
+    无平差字段时改正数列显示为空(兼容旧数据).
+    """
     if wb.computation is None:
         return ""
 
     comp = wb.computation
-    headers = ["点名", "观测角(DMS)", "方位角(DMS)", "距离(m)",
-               "Δx(m)", "Δy(m)", "X(m)", "Y(m)"]
+    headers = [
+        "点名", "观测角", "v_β(\")", "改正后角",
+        "方位角", "距离(m)", "Δx(m)", "Δy(m)",
+        "v_x(mm)", "v_y(mm)", "Δx改(m)", "Δy改(m)",
+        "X(m)", "Y(m)",
+    ]
     rows = []
 
-    # 交错输出: point[0], edge[0], point[1], edge[1], ...
     n_edges = len(comp.edge_records)
     n_points = len(comp.point_records)
 
     for i in range(max(n_points, n_edges)):
+        # 点名行
         if i < n_points:
             pr = comp.point_records[i]
+            # 观测角: point_records 上的 observed_angle_rad
+            obs_angle = rad_to_dms(pr.observed_angle_rad) if pr.observed_angle_rad else ""
+            # 角度改正数: 从对应的 edge_record 取
+            #   edge[i] 存储点[i]的角改正数 (无外部基准时 edge[0]无角度)
+            v_beta = ""
+            corrected_angle = ""
+            if i < n_edges:
+                er_i = comp.edge_records[i]
+                v_beta = _format_angle_correction_arcsec(er_i.angle_correction_rad)
+                corrected_angle = rad_to_dms(er_i.corrected_angle_rad) if er_i.corrected_angle_rad else ""
+            # 坐标: 优先用改正后坐标, 其次用原始坐标
+            x_val = format_meter(pr.corrected_x_m if pr.corrected_x_m is not None else pr.x_m, 3)
+            y_val = format_meter(pr.corrected_y_m if pr.corrected_y_m is not None else pr.y_m, 3)
             rows.append([
                 pr.point_name,
-                rad_to_dms(pr.observed_angle_rad) if pr.observed_angle_rad else "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                format_meter(pr.x_m, 3),
-                format_meter(pr.y_m, 3),
+                obs_angle,
+                v_beta,
+                corrected_angle,
+                "", "", "", "",  # 方位角/距离/增量列空
+                "", "", "", "",  # 改正数/改正后增量列空
+                x_val, y_val,
             ])
+        # 边行
         if i < n_edges:
             er = comp.edge_records[i]
+            az = rad_to_dms(er.azimuth_rad) if er.azimuth_rad else ""
+            dist = format_meter(er.distance_m, 4)
+            dx = format_meter(er.delta_x_m, 4)
+            dy = format_meter(er.delta_y_m, 4)
+            vx = _format_coord_correction_mm(er.delta_x_correction_m)
+            vy = _format_coord_correction_mm(er.delta_y_correction_m)
+            dx_c = format_meter(er.corrected_delta_x_m, 4) if er.corrected_delta_x_m is not None else ""
+            dy_c = format_meter(er.corrected_delta_y_m, 4) if er.corrected_delta_y_m is not None else ""
             rows.append([
                 f"  → {er.point_name}",
-                rad_to_dms(er.observed_angle_rad) if er.observed_angle_rad else "-",
-                rad_to_dms(er.azimuth_rad) if er.azimuth_rad else "-",
-                format_meter(er.distance_m, 4),
-                format_meter(er.delta_x_m, 4),
-                format_meter(er.delta_y_m, 4),
-                "",
-                "",
+                "", "", "",  # 观测角/改正数/改正后角列空
+                az, dist, dx, dy,
+                vx, vy, dx_c, dy_c,
+                "", "",  # X/Y列空
             ])
 
     if is_md:
@@ -548,6 +668,15 @@ def _format_workbook(workbook, is_md: bool) -> str:
                 sections.append(f"\n--- 测段 {sec.section_id} (等外) ---\n")
             sections.append(_extra_obs_table(sec, is_md))
             sections.append(_leveling_summary(sec, is_md))
+
+        # 成果计算表 (阶段二十三)
+        adj_text = _leveling_adjustment_table(workbook, is_md)
+        if adj_text:
+            if is_md:
+                sections.append("\n## 成果计算\n")
+            else:
+                sections.append("\n--- 成果计算 ---\n")
+            sections.append(adj_text)
 
     elif isinstance(workbook, TraversingWorkbook):
         sections.append(_traversing_header_text(workbook))

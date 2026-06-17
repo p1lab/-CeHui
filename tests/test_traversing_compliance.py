@@ -199,13 +199,13 @@ class TestNegativeTraversingCompliance:
     """构造超限数据, 验证检核器能正确报告失败"""
 
     def test_distance_reading_diff_exceeds(self):
-        """距离读数差超限: 一级限差 5mm"""
+        """距离读数差超限: 一级限差 10mm"""
         wb = _make_grade1_wb()
-        # 修改第一边往测第一读数, 加 10mm (0.01m) 偏移
+        # 修改第一边往测第一读数, 加 15mm (0.015m) 偏移 (超 10mm 限差)
         edge = wb.distance_observations[0]
         old_val = edge.forward_sets[0].readings[0].reading_m
         edge.forward_sets[0].readings[0] = DistanceReading(
-            reading_m=old_val + 0.01, is_slope=True)
+            reading_m=old_val + 0.015, is_slope=True)
         # 重新计算 forward_mean (validator 会重算, 但这里先手动)
 
         report = check_traversing_compliance(wb)

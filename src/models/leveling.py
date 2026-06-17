@@ -245,6 +245,32 @@ class ExtraLevelingSection:
 # ──────────────────────────────────────────────────────────────────────
 
 @dataclass
+class LevelingAdjustmentRecord:
+    """水准平差单条记录（逐站）."""
+    point_name: str                       # 点名（前视点）
+    distance_km: Optional[float] = None    # 累积距离 (km)
+    observed_height_diff_m: Optional[float] = None  # 观测高差 (m)
+    correction_mm: Optional[float] = None  # 改正数 (mm)
+    corrected_height_diff_m: Optional[float] = None  # 改正后高差 (m)
+    height_m: Optional[float] = None       # 改正后高程 (m)
+
+
+@dataclass
+class LevelingAdjustment:
+    """水准平差结果."""
+    records: List[LevelingAdjustmentRecord] = field(default_factory=list)
+    closure_error_mm: Optional[float] = None   # 闭合差 (mm)
+    closure_limit_mm: Optional[float] = None   # 限差 (mm)
+    passed: Optional[bool] = None               # 是否合格
+    correction_per_km_mm: Optional[float] = None  # 每公里改正数 (mm/km)
+    total_distance_km: Optional[float] = None    # 路线总长 (km)
+    # 往返测专用
+    round_trip_discrepancy_mm: Optional[float] = None  # 往返测不符值 (mm)
+    round_trip_limit_mm: Optional[float] = None       # 往返测限差 (mm)
+    mean_height_diff_m: Optional[float] = None        # 往返测中数高差 (m)
+
+
+@dataclass
 class LevelingWorkbook:
     """
     完整水准观测手簿.
@@ -267,6 +293,9 @@ class LevelingWorkbook:
     round_trip_discrepancy_mm: Optional[float] = None   # |h_往 + h_返| (mm)
     round_trip_limit_mm: Optional[float] = None         # 4√L (mm)
     round_trip_passed: Optional[bool] = None            # 是否合格
+
+    # ── 平差结果 ──
+    adjustment: Optional[LevelingAdjustment] = None
 
     # 教学声明 (自动附加)
     teaching_disclaimer: str = (

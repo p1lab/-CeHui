@@ -706,6 +706,10 @@ def generate_traversing_workbook(
     computation = _build_computation(
         points, angle_obs, distance_obs, info, grade)
 
+    # ── 简易平差（二次解算，基于正向传播结果） ──
+    from ..adjustment import adjust_traverse
+    adjust_traverse(computation)
+
     return TraversingWorkbook(
         grade=grade,
         instrument_grade=instrument_grade,

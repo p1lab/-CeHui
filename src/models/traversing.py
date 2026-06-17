@@ -269,6 +269,8 @@ class TraversePointRecord:
     # 坐标
     x_m: Optional[float] = None                  # 纵坐标 X (m)
     y_m: Optional[float] = None                  # 横坐标 Y (m)
+    corrected_x_m: Optional[float] = None        # 改正后纵坐标 X (m)
+    corrected_y_m: Optional[float] = None        # 改正后横坐标 Y (m)
 
     # 高程 (三角高程, axiom A3.3: dH = S*cos(Z) + h_inst - h_prism)
     height_m: Optional[float] = None             # 高程 H (m)

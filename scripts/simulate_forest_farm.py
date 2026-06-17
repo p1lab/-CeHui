@@ -235,6 +235,24 @@ def simulate_traversing(normal_points):
             k = 1.0 / (comp_data.fd_m / comp_data.total_length_m)
             print(f"  全长相对闭合差: 1/{k:.0f}")
 
+        # 平差结果 (阶段二十四)
+        print()
+        print("  -- 平差结果 (简易平差) --")
+        last_point = comp_data.point_records[-1]
+        if last_point.corrected_x_m is not None:
+            print(f"  改正后终点坐标: X={last_point.corrected_x_m:.4f}, Y={last_point.corrected_y_m:.4f}")
+            # 验证改正后终点坐标精确归位
+            target_x = points_xy[-1][1]
+            target_y = points_xy[-1][2]
+            dx = abs(last_point.corrected_x_m - target_x)
+            dy = abs(last_point.corrected_y_m - target_y)
+            print(f"  已知终点坐标:   X={target_x:.4f}, Y={target_y:.4f}")
+            print(f"  坐标闭合精度:   dX={dx*1000:.2f} mm, dY={dy*1000:.2f} mm")
+            if dx < 1e-4 and dy < 1e-4:
+                print("  改正后坐标精确归位 [OK]")
+            else:
+                print("  改正后坐标未精确归位 [FAIL]")
+
     return wb
 
 
@@ -380,6 +398,40 @@ def simulate_leveling(normal_points):
                 f"f_h = {sec.closure_error_mm:.2f} mm, "
                 f"限差 = {sec.closure_limit_mm:.1f} mm"
             )
+
+    # 平差结果 (阶段二十四)
+    if wb.adjustment is not None:
+        print()
+        print("── 平差结果 (简易平差) ──")
+        adj = wb.adjustment
+        print(f"  闭合差: {adj.closure_error_mm:.3f} mm")
+        print(f"  限差: ±{adj.closure_limit_mm:.1f} mm")
+        print(f"  是否合格: {'合格' if adj.passed else '不合格'}")
+        if adj.correction_per_km_mm is not None:
+            print(f"  每公里改正数: {adj.correction_per_km_mm:.3f} mm/km")
+
+        # 验证改正后终点高程精确归位
+        last_rec = adj.records[-1]
+        if last_rec.height_m is not None:
+            print(f"  改正后终点高程: {last_rec.height_m:.5f} m")
+            print(f"  已知终点高程:   {end_h:.5f} m")
+            dh = abs(last_rec.height_m - end_h)
+            print(f"  高程闭合精度:   {dh*1000:.2f} mm")
+            if dh < 1e-4:
+                print("  改正后高程精确归位 [OK]")
+            else:
+                print("  改正后高程未精确归位 [FAIL]")
+
+        # 往返测附注
+        if wb.is_round_trip:
+            print()
+            print("  -- 往返测附注 --")
+            if adj.round_trip_discrepancy_mm is not None:
+                print(f"  往返测不符值: {adj.round_trip_discrepancy_mm:.3f} mm")
+            if adj.round_trip_limit_mm is not None:
+                print(f"  往返测限差: ±{adj.round_trip_limit_mm:.1f} mm")
+            if adj.mean_height_diff_m is not None:
+                print(f"  往返测中数高差: {adj.mean_height_diff_m:.5f} m")
 
     return wb
 

@@ -75,7 +75,7 @@ _TRAVERSING_LIMITS = {
                 "direction_diff_across_sets_arcsec": 12.0,
             },
             "half_set_diff_arcsec": 12.0,
-            "reading_diff_mm": 5.0,
+            "reading_diff_mm": 10.0,
             "round_trip_diff_mm": 10.0,
             "azimuth_closure_coefficient": 10.0,
             "relative_closure_denominator": 15000,
@@ -112,7 +112,7 @@ _TRAVERSING_LIMITS = {
                 "direction_diff_across_sets_arcsec": 12.0,
             },
             "half_set_diff_arcsec": 12.0,
-            "reading_diff_mm": 5.0,
+            "reading_diff_mm": 10.0,
             "round_trip_diff_mm": 10.0,
             "azimuth_closure_coefficient": 16.0,
             "relative_closure_denominator": 10000,
@@ -339,7 +339,7 @@ def _check_distance_observations(
     report: TraversingComplianceReport,
 ):
     """检核各边距离观测."""
-    limit_rd = limits.get("reading_diff_mm", 5.0)
+    limit_rd = limits.get("reading_diff_mm", 10.0)
     limit_rt = limits.get("round_trip_diff_mm", 10.0)
 
     for edge in workbook.distance_observations:

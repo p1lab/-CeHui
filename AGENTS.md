@@ -8,6 +8,8 @@
 
 阶段十四至十七完成了**数据真实性改进**（详见 `AGENTS_S3.md`），包括：角度观测测回间自然分散、距离读数自然分散、闭合差可控非零化、附合导线外部方位基准支持。
 
+阶段十八至二十四完成了**平差计算与成果输出**，包括：水准往返测真实性改进、导线角度观测手簿格式修正、导线简易平差（闭合差分配）、水准简易平差（闭合差分配）、导线成果计算表14列格式化、水准成果计算表格式化、端到端集成测试与林场脚本验证。全部24个开发阶段已完成。
+
 项目位置：`D:\Data\Documents\模拟观测数据CeHui\`
 
 ## 核心数学框架
@@ -402,8 +404,177 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 - JSON 格式化器不做修改（数据模型层面保留全部计算字段）
 - 274/274 测试通过 (前阶段 268 + 阶段十九 6)
 
-待完成:
-- 导线一测回读数较差限差 5mm vs 10mm（待确认测距精度等级）
+### 阶段二十：导线简易平差（闭合差分配，基于正向解算结果的二次解算） ✅ 已完成
+
+**目标：** 新增独立平差函数，基于 `TraverseComputation` 已有的正向传播结果和闭合差，计算改正数并填充预留字段，使改正后终点坐标精确等于已知值。**不修改 `_build_computation()` 和 `validate_traverse_computation()` 的原有逻辑。**
+
+**架构原则：** 平差是正向解算之后的二次解算，输入=已完成的 `TraverseComputation`，输出=改正数+改正后值。正向传播逻辑保持不动，平差逻辑完全独立。
+
+**前置条件：** 阶段十九已完成；`TraversePointRecord` 预留字段已就绪；`TraverseComputation.adjustment_method` 已存在；`comp.fx_m/fy_m/fd_m` 和 `comp.azimuth_closure_error_arcsec` 已由正向传播/验证器填入。
+
+交付物:
+- `src/adjustment/traversing_adjustment.py` — **新模块**（不修改 generators/validators）：
+  - `adjust_traverse(comp: TraverseComputation) -> None`：就地填充预留字段
+  - 4 步平差逻辑（全部基于 comp 已有数据）：
+    1. **角度闭合差分配**：`v_beta = -f_beta / n`，余数按短边优先分配；检核 `SUM(v_beta) = -f_beta`
+    2. **改正后方位角推算**：`alpha_i+1 = alpha_i + beta_corrected - 180`（左角）；检核终边方位角精确等于已知值
+    3. **坐标增量闭合差分配**：`v_xi = -f_x * D_i / SUM(D)`，`v_yi` 同理；检核 `SUM(v_x) = -f_x`，`SUM(v_y) = -f_y`
+    4. **改正后坐标推算**：`x_i+1 = x_i + dx'_i`；检核终点坐标精确等于已知值
+  - 填充 `TraversePointRecord` 全部 7 个预留字段：`angle_correction_rad`、`corrected_angle_rad`、`distance_correction_m`（固定为0，简易平差不改距离）、`delta_x_correction_m`、`delta_y_correction_m`、`corrected_delta_x_m`、`corrected_delta_y_m`
+  - 新增改正后坐标字段（需评估是否在 `TraversePointRecord` 中新增 `corrected_x_m`/`corrected_y_m` 或复用现有字段）
+- `src/adjustment/__init__.py` — 模块导出
+- `src/generators/traversing_generator.py` — 仅在 `generate_traversing_workbook()` 末尾调用 `adjust_traverse(comp)`，不改 `_build_computation()`
+- `tests/test_traversing_adjustment.py` — 新测试文件：
+  - 闭合导线平差：改正后终点坐标精确归位、改正数求和检核
+  - 附合导线平差：含外部基准方位角、终边方位角精确归位
+  - 闭合差不可整除时的余数分配：短边优先
+  - 数学真值模式（target_closure_ratio=0）：改正数极小但流程完整
+  - 可控非零闭合差模式（target_closure_ratio=0.3）：改正数有教学意义
+  - 右角导线平差
+  - **回归测试**：确认 `_build_computation()` 输出与平差前完全一致（平差不改原有数据）
+
+关键技术点:
+- **平差是纯计算层**，不依赖生成器或验证器内部状态，仅读取 `TraverseComputation` 的公开字段
+- 角度闭合差不能被 n 整除时，余数（以角秒为单位）按短边优先分配给对应观测角
+- 简易平差不改距离（`distance_correction_m = 0`），仅改坐标增量
+- 改正后坐标增量 = 原增量 + 改正数，非重新用改正后方位角计算（简易平差近似）
+- 闭合导线与附合导线共用同一套分配逻辑，仅闭合差计算方式不同
+- 平差是内业计算，与观测手簿独立，不回写观测数据
+
+交付成果:
+- `src/adjustment/__init__.py` — 模块导出
+- `src/adjustment/traversing_adjustment.py` — `adjust_traverse(comp)` 4步平差
+- `src/models/traversing.py` — 新增 `corrected_x_m`/`corrected_y_m` 字段
+- `src/generators/traversing_generator.py` — 主函数末尾调用 `adjust_traverse(comp)`
+- `tests/test_traversing_adjustment.py` — 21 项测试
+- 295/295 测试通过 (前阶段 274 + 阶段二十 21)
+
+### 阶段二十一：水准平差（闭合差分配，基于正向解算结果的二次解算） ✅ 已完成
+
+**目标：** 新增水准测量的闭合差分配逻辑和成果计算表数据模型，支持单程和往返测场景。与导线平差同一架构：平差基于已有的验证结果（闭合差）进行二次解算，不修改正向传播逻辑。
+
+**前置条件：** 阶段二十已完成（导线平差作为参考实现）。
+
+交付物:
+- `src/models/leveling.py`:
+  - 新增 `LevelingAdjustmentRecord` 数据类：点名、距离(km)、观测高差(m)、改正数(mm)、改正后高差(m)、高程(m)
+  - 新增 `LevelingAdjustment` 数据类：记录列表、闭合差(mm)、限差(mm)、是否合格、每公里改正数(mm/km)、路线总长(km)、往返测专用字段(discrepancy_mm/limit_mm/mean_height_diff_m)
+  - `LevelingWorkbook` 新增 `adjustment` 字段
+- `src/adjustment/leveling_adjustment.py` — **新模块**（与导线平差同目录）：
+  - `adjust_leveling(wb: LevelingWorkbook) -> None`：就地填充 adjustment 字段
+  - 单程附合路线：基于 `section.closure_error_mm`（已由验证器填入）按距离反号分配
+  - 往返测两阶段处理：先取中数、再分配路线闭合差
+  - 等外水准（ExtraLevelingSection）支持
+- `src/adjustment/__init__.py` — 导出 `adjust_traverse` 和 `adjust_leveling`
+- `src/generators/leveling_generator.py` — 仅在 `generate_leveling_workbook()` 末尾调用 `adjust_leveling(wb)`，不改生成器内部逻辑
+- `tests/test_leveling_adjustment.py` — 新测试文件（13项测试）：
+  - TestSingleRunAdjustment（6项）：零闭合差、正/负闭合差、改正数求和检核、不等距分配、闭合路线
+  - TestExtraLevelingAdjustment（1项）：等外水准单程平差
+  - TestRoundTripAdjustment（2项）：往返测零不符值、往返测有不符值
+  - TestGeneratorIntegration（4项）：三等单程、二等往返测、等外单程、四等闭合路线
+
+关键技术点:
+- 单程路线：`v_i = -f_h * L_i / SUM(L)` 或按测站数分配
+- 往返测两阶段：第一阶段取 `h_mean = (h_fwd - h_ret) / 2`（注意返测高差符号），第二阶段对中数高差分配路线闭合差
+- 水准闭合差按距离分配（从视距计算路线长度），无视距数据时按等距分配
+- 成果计算表为独立输出，不回写观测手簿
+- 308/308 测试通过 (前阶段 295 + 阶段二十一 13)
+
+### 阶段二十二：导线成果计算表格式化扩展（8列→14列） ✅ 已完成
+
+**目标：** 扩展导线成果计算表的 text/excel 输出为标准 14 列格式。
+
+**前置条件：** 阶段二十已完成（平差数据已填入模型）。
+
+交付物:
+- `src/formatters/text_formatter.py`:
+  - `_traversing_computation_table()` 扩展为 14 列：点名、观测角、改正数v_beta、改正后角值、方位角、距离、dx、dy、v_x、v_y、dx改、dy改、X、Y ✅
+  - 点名行和边行交替排列（点名行填角度和坐标，边行填方位角、距离和增量） ✅
+- `src/formatters/excel_formatter.py`:
+  - `_traversing_computation_sheet()` 同步扩展为 14 列 ✅
+  - 列宽自适应，改正数列用 mm 单位显示 ✅
+  - 底部闭合差汇总区 ✅
+- `src/formatters/json_formatter.py`:
+  - 序列化平差字段（已由 `_clean_dict()` 自动处理，确认无遗漏） ✅
+- `tests/test_formatters.py` — 新增 `TestComputationTableFormat`（6项测试） ✅：
+  - Markdown 14列表头完整性验证
+  - 点名行角度和坐标列验证（列0-3有值，列4-11为空，列12-13有坐标）
+  - 边行方位角和距离列验证（列1-3为空，列4-7有值，列12-13为空）
+  - 平差后改正数列非空验证（v_beta/v_x/v_y）
+  - Excel 14列表头验证
+  - Excel 改正数列非空验证
+
+关键技术点:
+- 标准 14 列格式中，点名行填：点名、观测角、改正数、改正后角值、空×6、X、Y；边行填：空×4、方位角、距离、dx、dy、v_x、v_y、dx改、dy改、空×2
+- 角度改正数以角秒显示（保留1位小数），坐标改正数以毫米显示（保留1位小数）
+- 兼容旧数据：无平差字段时改正数列显示为空
+- 314/314 测试通过 (前阶段 308 + 阶段二十二 6)
+
+### 阶段二十三：水准成果计算表格式化 ✅ 已完成
+
+**目标：** 新增水准成果计算表的 text/excel/JSON 输出。
+
+**前置条件：** 阶段二十一已完成（水准平差数据模型已就绪），阶段二十二已完成（导线成果表作为参考实现）。
+
+交付物:
+- `src/formatters/text_formatter.py`:
+  - 新增 `_leveling_adjustment_table()` 函数：6 列格式（点名、距离km、观测高差m、改正数mm、改正后高差m、高程m） ✅
+  - 底部辅助计算区：闭合差、限差、是否合格、每公里改正数、路线总长 ✅
+  - 往返测附注：往返测不符值、往返测限差、往返测中数高差 ✅
+  - 集成到 `_format_workbook()` 主入口，在观测记录后输出"## 成果计算" ✅
+- `src/formatters/excel_formatter.py`:
+  - 新增 `_leveling_adjustment_sheet()` 函数：同 6 列 + 辅助区 ✅
+  - 集成到 `workbook_to_excel()` 主入口，作为第4个 Sheet ✅
+- `src/formatters/json_formatter.py`:
+  - 序列化 `LevelingAdjustment` 对象（已由 `_clean_dict()` 自动处理，确认无遗漏） ✅
+- `tests/test_formatters.py` — 新增 `TestLevelingAdjustmentFormat`（8项测试） ✅：
+  - Markdown 6列表头完整性验证
+  - Markdown 数据行完整性验证（6站，所有列非空）
+  - Markdown 辅助计算区格式验证（闭合差/限差/是否合格/每公里改正数）
+  - Markdown 终点高程精确性验证（=108.0m）
+  - Markdown 往返测附注验证（往返测不符值/中数高差）
+  - Excel 6列表头验证
+  - Excel 终点高程精确性验证
+  - JSON adjustment 字段及子字段完整性验证
+
+关键技术点:
+- 水准成果表是独立表格/Sheet，不与观测手簿混排
+- 改正数列单位 mm（与观测高差 m 不同单位），需在列头标注
+- 辅助区格式："闭合差 = xxx mm | 限差 = ±xxx mm | 是否合格: 合格/不合格 | 每公里改正数 = xxx mm/km"
+- 往返测场景：成果表基于中数高差，附注往返测不符值、限差、中数高差
+- 无平差数据时返回空字符串/不创建Sheet（兼容旧数据）
+- 322/322 测试通过 (前阶段 314 + 阶段二十三 8)
+
+### 阶段二十四：端到端集成测试与林场脚本验证 ✅ 已完成
+
+**目标：** 全链路 E2E 验证：生成 → 平差 → 格式化输出 → 合规检核，确保闭环。
+
+**前置条件：** 阶段二十至二十三全部完成。
+
+交付物:
+- `tests/test_e2e.py` — 扩展 E2E 测试（3个测试类，14项测试） ✅：
+  - `TestTraversingAdjustmentE2E`（6项）：一级闭合/附合 + 二级 + 图根 + 数学真值模式 + 全流程输出，验证改正后坐标闭合
+  - `TestLevelingAdjustmentE2E`（5项）：三等/四等单程 + 二等往返测 + 数学真值模式 + 全流程输出，验证改正后高程闭合
+  - `TestControlledClosureE2E`（3项）：导线/水准/往返测可控非零闭合差模式，生成→平差→检核全流程
+- `scripts/simulate_forest_farm.py` ✅:
+  - 导线部分新增平差结果输出：改正后终点坐标、已知终点坐标、坐标闭合精度、精确归位验证
+  - 水准部分新增平差结果输出：闭合差、限差、是否合格、每公里改正数、改正后终点高程、高程闭合精度、精确归位验证
+  - 水准部分新增往返测附注：往返测不符值、限差、中数高差
+  - 林场脚本端到端验证通过：导线改正后坐标精确归位 [OK]，水准改正后高程精确归位 [OK]
+
+关键技术点:
+- E2E 测试验证「改正后终点坐标/高程精确等于已知值」这一核心不变量（容差 1e-4）
+- 导线 E2E 覆盖：一级闭合、一级附合（含外部基准）、二级、图根、数学真值模式
+- 水准 E2E 覆盖：三等单程、四等单程、二等往返测、数学真值模式
+- 可控非零闭合差 E2E：验证闭合差非零但合规，平差后精确归位
+- 林场脚本作为真实场景验收：14点附合导线 + 22站往返测二等水准，全流程通过
+- 数学真值模式下改正数极小（角秒级/mm级），但流程必须完整执行
+- 336/336 测试通过 (前阶段 322 + 阶段二十四 14)
+
+---
+
+**已完成问题：**
+- ~~导线一测回读数较差限差 5mm vs 10mm~~ → 已确认统一为 10mm（2026-06-17）
 
 ## 编码约定
 
@@ -433,3 +604,4 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 2. 如需理解详细推导过程，阅读 kimi.md 对应章节
 3. 检查当前开发阶段进度，从对应阶段继续工作
 4. 涉及规范参数时，优先检查阶段二已锁定的 JSON 配置文件
+5. **当前进度**：全部24个开发阶段已完成(336/336测试)

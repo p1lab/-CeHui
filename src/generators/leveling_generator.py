@@ -598,6 +598,10 @@ def generate_leveling_workbook(
         workbook.round_trip_limit_mm = float(limit_mm)
         workbook.round_trip_passed = bool(discrepancy_mm <= limit_mm)
 
+    # ── 平差 ──
+    from ..adjustment.leveling_adjustment import adjust_leveling
+    adjust_leveling(workbook)
+
     return workbook
 
 

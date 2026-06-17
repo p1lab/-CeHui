@@ -232,6 +232,74 @@ def _leveling_summary_sheet(wb_excel: Workbook, workbook: LevelingWorkbook):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 水准手簿: 成果计算表 Sheet (阶段二十三)
+# ──────────────────────────────────────────────────────────────────────
+
+def _leveling_adjustment_sheet(wb_excel: Workbook, workbook: LevelingWorkbook):
+    """Sheet 4: 成果计算 (6列标准格式 + 辅助区).
+
+    列定义:
+        点名 | 距离(km) | 观测高差(m) | 改正数(mm) | 改正后高差(m) | 高程(m)
+
+    无平差数据时不创建 Sheet (兼容旧数据).
+    """
+    if workbook.adjustment is None:
+        return
+
+    ws = wb_excel.create_sheet("成果计算")
+    adj = workbook.adjustment
+
+    headers = [
+        "点名", "距离(km)", "观测高差(m)",
+        "改正数(mm)", "改正后高差(m)", "高程(m)",
+    ]
+    _write_header_row(ws, 1, headers)
+
+    row = 2
+    for rec in adj.records:
+        _write_data_row(ws, row, [
+            rec.point_name,
+            rec.distance_km if rec.distance_km is not None else "",
+            rec.observed_height_diff_m if rec.observed_height_diff_m is not None else "",
+            rec.correction_mm if rec.correction_mm is not None else "",
+            rec.corrected_height_diff_m if rec.corrected_height_diff_m is not None else "",
+            rec.height_m if rec.height_m is not None else "",
+        ])
+        row += 1
+
+    # 辅助计算区
+    row += 1
+    _write_header_row(ws, row, ["辅助计算项", "值"])
+    row += 1
+    aux_items = []
+    if adj.closure_error_mm is not None:
+        aux_items.append(("闭合差(mm)", f"{adj.closure_error_mm:.3f}"))
+    if adj.closure_limit_mm is not None:
+        aux_items.append(("限差(mm)", f"±{adj.closure_limit_mm:.1f}"))
+    if adj.passed is not None:
+        aux_items.append(("是否合格", "合格" if adj.passed else "不合格"))
+    if adj.correction_per_km_mm is not None:
+        aux_items.append(("每公里改正数(mm/km)", f"{adj.correction_per_km_mm:.3f}"))
+    if adj.total_distance_km is not None:
+        aux_items.append(("路线总长(km)", f"{adj.total_distance_km:.4f}"))
+
+    # 往返测附注
+    if workbook.is_round_trip:
+        if adj.round_trip_discrepancy_mm is not None:
+            aux_items.append(("往返测不符值(mm)", f"{adj.round_trip_discrepancy_mm:.3f}"))
+        if adj.round_trip_limit_mm is not None:
+            aux_items.append(("往返测限差(mm)", f"±{adj.round_trip_limit_mm:.1f}"))
+        if adj.mean_height_diff_m is not None:
+            aux_items.append(("往返测中数高差(m)", f"{adj.mean_height_diff_m:.5f}"))
+
+    for name, val in aux_items:
+        _write_data_row(ws, row, [name, val])
+        row += 1
+
+    _auto_column_width(ws)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # 导线手簿 Excel
 # ──────────────────────────────────────────────────────────────────────
 
@@ -368,15 +436,24 @@ def _traversing_distance_sheet(wb_excel: Workbook, workbook: TraversingWorkbook)
 
 
 def _traversing_computation_sheet(wb_excel: Workbook, workbook: TraversingWorkbook):
-    """Sheet 4: 成果计算."""
+    """Sheet 4: 成果计算 (14列标准格式).
+
+    列定义:
+        点名行: 点名 | 观测角 | v_beta(") | 改正后角 | 空×6 | X | Y
+        边  行: 空×4 | 方位角 | 距离 | dx | dy | v_x(mm) | v_y(mm) | dx改 | dy改 | 空×2
+    """
     if workbook.computation is None:
         return
 
     ws = wb_excel.create_sheet("成果计算")
     comp = workbook.computation
 
-    headers = ["点名", "观测角(DMS)", "方位角(DMS)", "距离(m)",
-               "Δx(m)", "Δy(m)", "X(m)", "Y(m)"]
+    headers = [
+        "点名", "观测角", "v_β(\")", "改正后角",
+        "方位角", "距离(m)", "Δx(m)", "Δy(m)",
+        "v_x(mm)", "v_y(mm)", "Δx改(m)", "Δy改(m)",
+        "X(m)", "Y(m)",
+    ]
     _write_header_row(ws, 1, headers)
 
     row = 2
@@ -384,24 +461,48 @@ def _traversing_computation_sheet(wb_excel: Workbook, workbook: TraversingWorkbo
     n_points = len(comp.point_records)
 
     for i in range(max(n_points, n_edges)):
+        # 点名行
         if i < n_points:
             pr = comp.point_records[i]
+            obs_angle_str = rad_to_dms(pr.observed_angle_rad) if pr.observed_angle_rad else ""
+            # 角度改正数: 从对应的 edge_record 取
+            v_beta_str = ""
+            corrected_angle_str = ""
+            if i < n_edges:
+                er_i = comp.edge_records[i]
+                v_beta_str = (f"{er_i.angle_correction_rad * _ARCSEC_PER_RAD:.1f}"
+                              if er_i.angle_correction_rad is not None else "")
+                corrected_angle_str = rad_to_dms(er_i.corrected_angle_rad) if er_i.corrected_angle_rad else ""
+            x_val = pr.corrected_x_m if pr.corrected_x_m is not None else pr.x_m
+            y_val = pr.corrected_y_m if pr.corrected_y_m is not None else pr.y_m
             _write_data_row(ws, row, [
                 pr.point_name,
-                rad_to_dms(pr.observed_angle_rad) if pr.observed_angle_rad else "",
-                "", "", "", "",
-                pr.x_m, pr.y_m,
+                obs_angle_str,
+                v_beta_str,
+                corrected_angle_str,
+                "", "", "", "",  # 方位角/距离/增量列空
+                "", "", "", "",  # 改正数/改正后增量列空
+                x_val, y_val,
             ])
             row += 1
+        # 边行
         if i < n_edges:
             er = comp.edge_records[i]
+            az_str = rad_to_dms(er.azimuth_rad) if er.azimuth_rad else ""
+            vx_str = (f"{er.delta_x_correction_m * 1000:.1f}"
+                      if er.delta_x_correction_m is not None else "")
+            vy_str = (f"{er.delta_y_correction_m * 1000:.1f}"
+                      if er.delta_y_correction_m is not None else "")
             _write_data_row(ws, row, [
                 f"→{er.point_name}",
-                rad_to_dms(er.observed_angle_rad) if er.observed_angle_rad else "",
-                rad_to_dms(er.azimuth_rad) if er.azimuth_rad else "",
+                "", "", "",  # 观测角/改正数/改正后角列空
+                az_str,
                 er.distance_m,
                 er.delta_x_m, er.delta_y_m,
-                "", "",
+                vx_str, vy_str,
+                er.corrected_delta_x_m if er.corrected_delta_x_m is not None else "",
+                er.corrected_delta_y_m if er.corrected_delta_y_m is not None else "",
+                "", "",  # X/Y列空
             ])
             row += 1
 
@@ -441,6 +542,7 @@ def workbook_to_excel(workbook, filepath: str):
         _leveling_metadata_sheet(wb, workbook)
         _leveling_observation_sheet(wb, workbook)
         _leveling_summary_sheet(wb, workbook)
+        _leveling_adjustment_sheet(wb, workbook)
     elif isinstance(workbook, TraversingWorkbook):
         _traversing_metadata_sheet(wb, workbook)
         _traversing_angle_sheet(wb, workbook)

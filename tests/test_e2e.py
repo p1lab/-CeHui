@@ -406,3 +406,348 @@ class TestReproducibilityE2E:
         j1 = workbook_to_json(wb1)
         j2 = workbook_to_json(wb2)
         assert j1 == j2, "相同种子应产生相同 JSON"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段二十四: 含平差的 E2E 测试
+# ──────────────────────────────────────────────────────────────────────
+
+class TestTraversingAdjustmentE2E:
+    """导线 E2E (含平差): 生成 → 平差 → 验证改正后坐标闭合."""
+
+    def _make_traverse(self, grade, seed=42, target_closure_ratio=0.0,
+                       start_ref=None, end_ref=None):
+        """生成导线 workbook (含平差)."""
+        pts = [
+            ("A", 1000.0, 1000.0),
+            ("P1", 1100.0, 1050.0),
+            ("P2", 1200.0, 1100.0),
+            ("B", 1300.0, 1200.0),
+        ]
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+
+        kwargs = dict(
+            points=pts,
+            start_azimuth=az_start,
+            end_azimuth=az_end,
+            grade=grade,
+            num_angle_sets=2,
+            seed=seed,
+            target_closure_ratio=target_closure_ratio,
+        )
+        if start_ref and end_ref:
+            kwargs["start_reference_point"] = start_ref
+            kwargs["end_reference_point"] = end_ref
+
+        return generate_traversing_workbook(**kwargs)
+
+    def test_grade1_closed_adjustment(self):
+        """一级闭合导线: 改正后终点坐标精确等于已知值."""
+        wb = self._make_traverse(TraverseGrade.GRADE_1, seed=42,
+                                 target_closure_ratio=0.3)
+        comp = wb.computation
+        assert comp is not None, "应有成果计算数据"
+
+        # 验证改正后终点坐标精确归位
+        last_point = comp.point_records[-1]
+        assert last_point.corrected_x_m is not None
+        assert last_point.corrected_y_m is not None
+        # 终点已知坐标
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4, (
+            f"改正后终点X={last_point.corrected_x_m}, 期望 1300.0"
+        )
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4, (
+            f"改正后终点Y={last_point.corrected_y_m}, 期望 1200.0"
+        )
+
+        # 验证 → 合规通过
+        comp_report = check_traversing_compliance(wb)
+        assert comp_report.passed, "合规检核未通过"
+
+    def test_grade2_adjustment(self):
+        """二级导线: 改正后终点坐标精确归位."""
+        wb = self._make_traverse(TraverseGrade.GRADE_2, seed=42,
+                                 target_closure_ratio=0.3)
+        comp = wb.computation
+        last_point = comp.point_records[-1]
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4
+
+    def test_root_adjustment(self):
+        """图根导线: 改正后终点坐标精确归位."""
+        wb = self._make_traverse(TraverseGrade.ROOT, seed=123,
+                                 target_closure_ratio=0.3)
+        comp = wb.computation
+        last_point = comp.point_records[-1]
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4
+
+    def test_attached_traverse_adjustment(self):
+        """附合导线 (含外部基准): 改正后终点坐标精确归位."""
+        pts = [
+            ("B", 1000.0, 1000.0),
+            ("K1", 1100.0, 1050.0),
+            ("K2", 1200.0, 1100.0),
+            ("G", 1300.0, 1200.0),
+        ]
+        az_start = _azimuth(950, 980, 1000, 1000)  # B2 → B
+        az_end = _azimuth(1300, 1200, 1350, 1230)   # G → G2
+        start_ref = ("B2", 950.0, 980.0)
+        end_ref = ("G2", 1350.0, 1230.0)
+
+        wb = generate_traversing_workbook(
+            points=pts,
+            start_azimuth=az_start,
+            end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1,
+            num_angle_sets=2,
+            seed=42,
+            target_closure_ratio=0.3,
+            start_reference_point=start_ref,
+            end_reference_point=end_ref,
+        )
+        comp = wb.computation
+        last_point = comp.point_records[-1]
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4, (
+            f"附合导线改正后终点X={last_point.corrected_x_m}, 期望 1300.0"
+        )
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4, (
+            f"附合导线改正后终点Y={last_point.corrected_y_m}, 期望 1200.0"
+        )
+
+    def test_math_true_mode_adjustment(self):
+        """数学真值模式 (target_closure_ratio=0): 改正数极小但流程完整."""
+        wb = self._make_traverse(TraverseGrade.GRADE_1, seed=42,
+                                 target_closure_ratio=0.0)
+        comp = wb.computation
+        last_point = comp.point_records[-1]
+        # 改正后坐标仍精确归位
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4
+
+        # 改正数极小 (数学真值模式下闭合差接近0)
+        for rec in comp.point_records:
+            if rec.angle_correction_rad is not None:
+                # 角秒级改正数
+                corr_arcsec = math.degrees(rec.angle_correction_rad) * 3600
+                assert abs(corr_arcsec) < 5.0, (
+                    f"数学真值模式角度改正数={corr_arcsec:.2f}s, 应极小"
+                )
+
+    def test_full_pipeline_with_output(self, tmp_path):
+        """全流程: 生成 → 平差 → 合规 → 四种格式输出 (含成果表)."""
+        wb = self._make_traverse(TraverseGrade.GRADE_1, seed=42,
+                                 target_closure_ratio=0.3)
+
+        # 验证通过
+        val = validate_traversing_workbook(wb)
+        assert val.all_passed
+
+        # 合规通过
+        comp = check_traversing_compliance(wb)
+        assert comp.passed
+
+        # JSON 含平差字段
+        data = json.loads(workbook_to_json(wb))
+        comp_data = data.get("computation", {})
+        assert "point_records" in comp_data
+        last_rec = comp_data["point_records"][-1]
+        assert last_rec.get("corrected_x_m") is not None
+        assert last_rec.get("corrected_y_m") is not None
+
+        # Markdown 含成果计算表
+        md = workbook_to_markdown(wb)
+        assert "成果计算" in md
+
+        # Excel 含成果计算 Sheet
+        fp = str(tmp_path / "trav_adjusted.xlsx")
+        workbook_to_excel(wb, fp)
+        from openpyxl import load_workbook
+        xlsx = load_workbook(fp)
+        assert "成果计算" in xlsx.sheetnames
+
+
+class TestLevelingAdjustmentE2E:
+    """水准 E2E (含平差): 生成 → 平差 → 验证改正后高程闭合."""
+
+    def test_grade3_single_run_adjustment(self):
+        """三等单程: 改正后终点高程精确等于已知值."""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=6, seed=42,
+            target_closure_ratio=0.3,
+        )
+        assert wb.adjustment is not None
+        records = wb.adjustment.records
+        assert len(records) > 0
+
+        # 改正后终点高程精确等于 108.0
+        last_rec = records[-1]
+        assert abs(last_rec.height_m - 108.0) < 1e-4, (
+            f"改正后终点高程={last_rec.height_m}, 期望 108.0"
+        )
+
+        # 合规通过
+        comp = check_leveling_compliance(wb)
+        assert comp.passed
+
+    def test_grade4_single_run_adjustment(self):
+        """四等单程: 改正后终点高程精确归位."""
+        route = RouteInfo("BM.C", 200.000, "BM.D", 215.000, 2.0)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_4,
+            num_stations=8, seed=42,
+            target_closure_ratio=0.3,
+        )
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 215.0) < 1e-4
+
+    def test_grade2_round_trip_adjustment(self):
+        """二等往返测: 改正后终点高程精确归位."""
+        route = RouteInfo("BM.E", 50.000, "BM.F", 50.800, 0.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=6, seed=42,
+            round_trip=True,
+            target_round_trip_ratio=0.4,
+        )
+        assert wb.adjustment is not None
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 50.8) < 1e-4, (
+            f"往返测改正后终点高程={last_rec.height_m}, 期望 50.8"
+        )
+
+        # 往返测附注存在
+        assert wb.adjustment.round_trip_discrepancy_mm is not None
+        assert wb.adjustment.mean_height_diff_m is not None
+
+    def test_math_true_mode_adjustment(self):
+        """数学真值模式: 改正数极小但流程完整."""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=6, seed=42,
+            target_closure_ratio=0.0,
+        )
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 108.0) < 1e-4
+
+        # 改正数极小
+        for rec in wb.adjustment.records:
+            if rec.correction_mm is not None:
+                assert abs(rec.correction_mm) < 1.0, (
+                    f"数学真值模式改正数={rec.correction_mm:.3f}mm, 应极小"
+                )
+
+    def test_full_pipeline_with_output(self, tmp_path):
+        """全流程: 生成 → 平差 → 合规 → 四种格式输出 (含成果表)."""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=6, seed=42,
+            target_closure_ratio=0.3,
+        )
+
+        # 验证通过
+        val = validate_leveling_workbook(wb)
+        assert val.all_passed
+
+        # 合规通过
+        comp = check_leveling_compliance(wb)
+        assert comp.passed
+
+        # JSON 含平差字段
+        data = json.loads(workbook_to_json(wb))
+        assert "adjustment" in data
+        adj = data["adjustment"]
+        assert adj["records"][-1]["height_m"] is not None
+
+        # Markdown 含成果计算表
+        md = workbook_to_markdown(wb)
+        assert "成果计算" in md
+
+        # Excel 含成果计算 Sheet
+        fp = str(tmp_path / "lev_adjusted.xlsx")
+        workbook_to_excel(wb, fp)
+        from openpyxl import load_workbook
+        xlsx = load_workbook(fp)
+        assert "成果计算" in xlsx.sheetnames
+
+
+class TestControlledClosureE2E:
+    """可控非零闭合差模式 E2E: 生成 → 平差 → 检核全流程."""
+
+    def test_traversing_controlled_closure(self):
+        """导线可控闭合差: 闭合差非零但合规, 平差后精确归位."""
+        pts = [
+            ("A", 1000.0, 1000.0),
+            ("P1", 1100.0, 1050.0),
+            ("P2", 1200.0, 1100.0),
+            ("B", 1300.0, 1200.0),
+        ]
+        az_start = _azimuth(1000, 1000, 1100, 1050)
+        az_end = _azimuth(1200, 1100, 1300, 1200)
+
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_start, end_azimuth=az_end,
+            grade=TraverseGrade.GRADE_1, seed=42,
+            target_closure_ratio=0.5,  # 50% 限差
+        )
+        comp = wb.computation
+
+        # 闭合差非零 (可控模式)
+        assert abs(comp.fd_m) > 1e-6, "可控模式下闭合差应非零"
+
+        # 合规通过 (在限差内)
+        comp_report = check_traversing_compliance(wb)
+        assert comp_report.passed, "可控闭合差应合规"
+
+        # 平差后精确归位
+        last_point = comp.point_records[-1]
+        assert abs(last_point.corrected_x_m - 1300.0) < 1e-4
+        assert abs(last_point.corrected_y_m - 1200.0) < 1e-4
+
+    def test_leveling_controlled_closure(self):
+        """水准可控闭合差: 闭合差非零但合规, 平差后精确归位."""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=6, seed=42,
+            target_closure_ratio=0.3,
+        )
+
+        # 闭合差非零
+        assert wb.adjustment.closure_error_mm is not None
+        assert abs(wb.adjustment.closure_error_mm) > 0.01, "可控模式下闭合差应非零"
+
+        # 合规通过
+        comp = check_leveling_compliance(wb)
+        assert comp.passed
+
+        # 平差后精确归位
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 108.0) < 1e-4
+
+    def test_round_trip_controlled_closure(self):
+        """往返测可控不符值: 不符值非零但合规, 平差后精确归位."""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8, seed=42,
+            round_trip=True,
+            target_round_trip_ratio=0.5,
+        )
+
+        # 往返测不符值非零
+        assert wb.round_trip_discrepancy_mm is not None
+        assert abs(wb.round_trip_discrepancy_mm) > 0.01, "可控模式下不符值应非零"
+
+        # 合规通过
+        comp = check_leveling_compliance(wb)
+        assert comp.passed
+
+        # 平差后精确归位
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 108.0) < 1e-4

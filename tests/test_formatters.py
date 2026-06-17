@@ -467,3 +467,397 @@ class TestAngleTableFormat:
         for row in rows:
             two_c = row[5]  # 2C 列
             assert two_c != "-", f"2C 值不应为空: {row[:4]}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段二十二: 导线成果计算表 14 列格式
+# ──────────────────────────────────────────────────────────────────────
+
+class TestComputationTableFormat:
+    """导线成果计算表: 14 列标准格式 (点名行/边行交替)."""
+
+    @pytest.fixture
+    def adjusted_wb(self):
+        """生成带平差的导线手簿 (target_closure_ratio=0.3 使改正数非零)."""
+        pts = [("A", 1000, 1000), ("P1", 1100, 1050), ("P2", 1200, 1100),
+               ("B", 1300, 1200)]
+        az = normalize_angle(math.atan2(50, 100))
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az, end_azimuth=az,
+            grade=TraverseGrade.GRADE_1, seed=42,
+            target_closure_ratio=0.3,
+        )
+        return wb
+
+    def _parse_computation_rows(self, md_text):
+        """从 Markdown 文本解析成果计算表行, 返回数据行列表."""
+        lines = md_text.split("\n")
+        in_comp = False
+        header_seen = False
+        rows = []
+        for line in lines:
+            if "## 成果计算" in line:
+                in_comp = True
+                continue
+            if in_comp and line.startswith("## "):
+                break  # 下一个 section
+            if not in_comp:
+                continue
+            if line.startswith("| ---"):
+                header_seen = True
+                continue
+            if header_seen and line.startswith("|"):
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                rows.append(cells)
+        return rows
+
+    def test_md_table_has_14_headers(self, adjusted_wb):
+        """Markdown 成果计算表表头应有 14 列."""
+        md = workbook_to_markdown(adjusted_wb)
+        lines = md.split("\n")
+        in_comp = False
+        header_line = None
+        for line in lines:
+            if "## 成果计算" in line:
+                in_comp = True
+                continue
+            if in_comp and line.startswith("|") and "---" not in line:
+                header_line = line
+                break
+        assert header_line is not None, "未找到成果计算表表头"
+        headers = [h.strip() for h in header_line.strip("|").split("|")]
+        assert len(headers) == 14, f"表头列数={len(headers)}, 期望 14"
+        # 验证关键列名
+        assert headers[0] == "点名"
+        assert headers[1] == "观测角"
+        assert headers[4] == "方位角"
+        assert headers[5] == "距离(m)"
+        assert headers[12] == "X(m)"
+        assert headers[13] == "Y(m)"
+
+    def test_point_rows_have_angle_and_coords(self, adjusted_wb):
+        """点名行: 列0-3有角度, 列4-11为空, 列12-13有坐标."""
+        md = workbook_to_markdown(adjusted_wb)
+        rows = self._parse_computation_rows(md)
+        assert len(rows) > 0
+
+        # 点名行: 不以 "→" 开头
+        point_rows = [r for r in rows if not r[0].startswith("→") and not r[0].startswith("  →")]
+        assert len(point_rows) > 0, "应至少有一行点名行"
+
+        for row in point_rows:
+            # 列0: 点名非空
+            assert row[0] != "", "点名不应为空"
+            # 列4-11: 方位角/距离/增量/改正数列为空
+            for i in range(4, 12):
+                assert row[i] == "", f"点名行列{i}应为空, 得到 '{row[i]}'"
+            # 列12-13: X/Y 坐标非空
+            assert row[12] != "", "点名行 X 坐标不应为空"
+            assert row[13] != "", "点名行 Y 坐标不应为空"
+
+    def test_edge_rows_have_azimuth_and_distance(self, adjusted_wb):
+        """边行: 列0-3为空, 列4-7有方位角/距离/增量, 列12-13为空."""
+        md = workbook_to_markdown(adjusted_wb)
+        rows = self._parse_computation_rows(md)
+        assert len(rows) > 0
+
+        # 边行: 以 "→" 开头
+        edge_rows = [r for r in rows if "→" in r[0]]
+        assert len(edge_rows) > 0, "应至少有一行边行"
+
+        for row in edge_rows:
+            # 列1-3: 观测角/改正数/改正后角为空
+            for i in range(1, 4):
+                assert row[i] == "", f"边行列{i}应为空, 得到 '{row[i]}'"
+            # 列4: 方位角非空
+            assert row[4] != "", "边行方位角不应为空"
+            # 列5: 距离非空
+            assert row[5] != "", "边行距离不应为空"
+            # 列12-13: X/Y 坐标为空
+            assert row[12] == "", "边行 X 坐标应为空"
+            assert row[13] == "", "边行 Y 坐标应为空"
+
+    def test_correction_columns_nonempty_after_adjustment(self, adjusted_wb):
+        """平差后改正数列 (v_beta, v_x, v_y) 应非空."""
+        md = workbook_to_markdown(adjusted_wb)
+        rows = self._parse_computation_rows(md)
+
+        # 收集所有改正数列值
+        # 列2: v_beta(") — 点名行
+        # 列8: v_x(mm) — 边行
+        # 列9: v_y(mm) — 边行
+        v_betas = []
+        v_xs = []
+        v_ys = []
+        for row in rows:
+            if "→" not in row[0]:
+                # 点名行
+                if row[2] != "":
+                    v_betas.append(row[2])
+            else:
+                # 边行
+                if row[8] != "":
+                    v_xs.append(row[8])
+                if row[9] != "":
+                    v_ys.append(row[9])
+
+        # target_closure_ratio=0.3 应产生非零改正数
+        assert len(v_betas) > 0, "应有非空的 v_beta 改正数"
+        assert len(v_xs) > 0, "应有非空的 v_x 改正数"
+        assert len(v_ys) > 0, "应有非空的 v_y 改正数"
+
+    def test_excel_computation_sheet_has_14_headers(self, adjusted_wb):
+        """Excel 成果计算表表头应有 14 列."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            filepath = f.name
+        try:
+            workbook_to_excel(adjusted_wb, filepath)
+            from openpyxl import load_workbook
+            wb_excel = load_workbook(filepath)
+            ws = wb_excel["成果计算"]
+
+            # 第1行为表头, 验证14列
+            header_count = 0
+            for col in range(1, 20):
+                val = ws.cell(row=1, column=col).value
+                if val is not None:
+                    header_count += 1
+            assert header_count == 14, f"Excel表头列数={header_count}, 期望 14"
+
+            # 验证关键列名
+            assert ws.cell(row=1, column=1).value == "点名"
+            assert ws.cell(row=1, column=2).value == "观测角"
+            assert ws.cell(row=1, column=5).value == "方位角"
+            assert ws.cell(row=1, column=6).value == "距离(m)"
+            assert ws.cell(row=1, column=13).value == "X(m)"
+            assert ws.cell(row=1, column=14).value == "Y(m)"
+        finally:
+            os.unlink(filepath)
+
+    def test_excel_correction_columns_nonempty(self, adjusted_wb):
+        """Excel 平差后改正数列应非空 (v_beta 列3, v_x 列9, v_y 列10)."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            filepath = f.name
+        try:
+            workbook_to_excel(adjusted_wb, filepath)
+            from openpyxl import load_workbook
+            wb_excel = load_workbook(filepath)
+            ws = wb_excel["成果计算"]
+
+            # 遍历数据行, 检查改正数列非空
+            v_beta_found = False
+            v_x_found = False
+            v_y_found = False
+            for row_num in range(2, ws.max_row + 1):
+                # 列1: 点名, 列3: v_beta, 列9: v_x, 列10: v_y
+                name = ws.cell(row=row_num, column=1).value
+                if name is None:
+                    continue
+                v_beta = ws.cell(row=row_num, column=3).value
+                v_x = ws.cell(row=row_num, column=9).value
+                v_y = ws.cell(row=row_num, column=10).value
+
+                if v_beta not in (None, ""):
+                    v_beta_found = True
+                if v_x not in (None, ""):
+                    v_x_found = True
+                if v_y not in (None, ""):
+                    v_y_found = True
+
+            assert v_beta_found, "Excel 应有非空的 v_beta 改正数"
+            assert v_x_found, "Excel 应有非空的 v_x 改正数"
+            assert v_y_found, "Excel 应有非空的 v_y 改正数"
+        finally:
+            os.unlink(filepath)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段二十三: 水准成果计算表格式化
+# ──────────────────────────────────────────────────────────────────────
+
+class TestLevelingAdjustmentFormat:
+    """水准成果计算表: 6 列格式 + 辅助区."""
+
+    @pytest.fixture
+    def grade3_wb(self):
+        """三等单程水准 (含平差, target_closure_ratio=0.3 使改正数非零)."""
+        route = RouteInfo("BM.A", 100.0, "BM.B", 108.0, 1.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_3,
+            num_stations=6, seed=42,
+            target_closure_ratio=0.3,
+        )
+        return wb
+
+    @pytest.fixture
+    def grade2_round_trip_wb(self):
+        """二等往返测水准 (含平差)."""
+        route = RouteInfo("BM.C", 200.0, "BM.D", 215.0, 2.5)
+        wb = generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8, seed=42,
+            round_trip=True, target_round_trip_ratio=0.3,
+        )
+        return wb
+
+    def _parse_adjustment_rows(self, md_text):
+        """从 Markdown 文本解析水准成果计算表行, 返回数据行列表."""
+        lines = md_text.split("\n")
+        in_adj = False
+        header_seen = False
+        rows = []
+        for line in lines:
+            if "## 成果计算" in line:
+                in_adj = True
+                continue
+            if in_adj and line.startswith("## "):
+                break  # 下一个 section
+            if in_adj and "**辅助计算**" in line:
+                break  # 进入辅助区
+            if not in_adj:
+                continue
+            if line.startswith("| ---"):
+                header_seen = True
+                continue
+            if header_seen and line.startswith("|"):
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                rows.append(cells)
+        return rows
+
+    def test_md_table_has_6_headers(self, grade3_wb):
+        """Markdown 成果计算表表头应有 6 列."""
+        md = workbook_to_markdown(grade3_wb)
+        lines = md.split("\n")
+        in_adj = False
+        header_line = None
+        for line in lines:
+            if "## 成果计算" in line:
+                in_adj = True
+                continue
+            if in_adj and line.startswith("|") and "---" not in line:
+                header_line = line
+                break
+        assert header_line is not None, "未找到水准成果计算表表头"
+        headers = [h.strip() for h in header_line.strip("|").split("|")]
+        assert len(headers) == 6, f"表头列数={len(headers)}, 期望 6"
+        assert headers[0] == "点名"
+        assert headers[1] == "距离(km)"
+        assert headers[2] == "观测高差(m)"
+        assert headers[3] == "改正数(mm)"
+        assert headers[4] == "改正后高差(m)"
+        assert headers[5] == "高程(m)"
+
+    def test_md_rows_have_data(self, grade3_wb):
+        """Markdown 成果计算表数据行应完整 (6站)."""
+        md = workbook_to_markdown(grade3_wb)
+        rows = self._parse_adjustment_rows(md)
+        assert len(rows) == 6, f"数据行数={len(rows)}, 期望 6"
+
+        for row in rows:
+            # 所有6列都应有值
+            for i, cell in enumerate(row):
+                assert cell != "", f"行{i}列不应为空: {row}"
+
+    def test_md_aux_area_present(self, grade3_wb):
+        """Markdown 辅助计算区应包含闭合差、限差、是否合格."""
+        md = workbook_to_markdown(grade3_wb)
+        assert "**辅助计算**" in md
+        assert "闭合差" in md
+        assert "限差" in md
+        assert "是否合格" in md
+        assert "每公里改正数" in md
+
+    def test_md_endpoint_height_exact(self, grade3_wb):
+        """Markdown 最后一行高程应精确等于终点高程 108.0."""
+        md = workbook_to_markdown(grade3_wb)
+        rows = self._parse_adjustment_rows(md)
+        assert len(rows) > 0
+        last_height_str = rows[-1][5]  # 高程(m) 列
+        last_height = float(last_height_str)
+        assert abs(last_height - 108.0) < 1e-4, (
+            f"终点高程={last_height}, 期望 108.0"
+        )
+
+    def test_md_round_trip_annotation(self, grade2_round_trip_wb):
+        """往返测场景应包含往返测附注."""
+        md = workbook_to_markdown(grade2_round_trip_wb)
+        assert "往返测附注" in md
+        assert "往返测不符值" in md
+        assert "往返测中数高差" in md
+
+    def test_excel_adjustment_sheet_has_6_headers(self, grade3_wb):
+        """Excel 成果计算表表头应有 6 列."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            filepath = f.name
+        try:
+            workbook_to_excel(grade3_wb, filepath)
+            from openpyxl import load_workbook
+            wb_excel = load_workbook(filepath)
+            assert "成果计算" in wb_excel.sheetnames, "应有成果计算 Sheet"
+            ws = wb_excel["成果计算"]
+
+            # 第1行为表头, 验证6列
+            header_count = 0
+            for col in range(1, 10):
+                val = ws.cell(row=1, column=col).value
+                if val is not None:
+                    header_count += 1
+            assert header_count == 6, f"Excel表头列数={header_count}, 期望 6"
+
+            # 验证关键列名
+            assert ws.cell(row=1, column=1).value == "点名"
+            assert ws.cell(row=1, column=2).value == "距离(km)"
+            assert ws.cell(row=1, column=3).value == "观测高差(m)"
+            assert ws.cell(row=1, column=4).value == "改正数(mm)"
+            assert ws.cell(row=1, column=5).value == "改正后高差(m)"
+            assert ws.cell(row=1, column=6).value == "高程(m)"
+        finally:
+            os.unlink(filepath)
+
+    def test_excel_endpoint_height_exact(self, grade3_wb):
+        """Excel 最后一行高程应精确等于终点高程 108.0."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            filepath = f.name
+        try:
+            workbook_to_excel(grade3_wb, filepath)
+            from openpyxl import load_workbook
+            wb_excel = load_workbook(filepath)
+            ws = wb_excel["成果计算"]
+
+            # 6站数据行: 第2-7行, 最后一行是第7行
+            # 找到最后一行数据 (跳过辅助区)
+            last_data_row = None
+            for row_num in range(2, ws.max_row + 1):
+                name = ws.cell(row=row_num, column=1).value
+                if name is None or name == "辅助计算项":
+                    break
+                last_data_row = row_num
+
+            assert last_data_row is not None, "应有数据行"
+            last_height = ws.cell(row=last_data_row, column=6).value
+            assert abs(last_height - 108.0) < 1e-4, (
+                f"终点高程={last_height}, 期望 108.0"
+            )
+        finally:
+            os.unlink(filepath)
+
+    def test_json_contains_adjustment(self, grade3_wb):
+        """JSON 输出应包含 adjustment 字段及其子字段."""
+        data = json.loads(workbook_to_json(grade3_wb))
+        assert "adjustment" in data
+        adj = data["adjustment"]
+        assert adj is not None
+        assert "records" in adj
+        assert len(adj["records"]) == 6
+        assert "closure_error_mm" in adj
+        assert "closure_limit_mm" in adj
+        assert "passed" in adj
+        assert "correction_per_km_mm" in adj
+        # 验证记录字段
+        rec = adj["records"][0]
+        assert "point_name" in rec
+        assert "distance_km" in rec
+        assert "observed_height_diff_m" in rec
+        assert "correction_mm" in rec
+        assert "corrected_height_diff_m" in rec
+        assert "height_m" in rec
