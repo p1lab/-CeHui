@@ -18,6 +18,7 @@ from ..models.traversing import TraversingWorkbook
 from ..models.common import LevelingGrade, RodType
 from ._utils import (
     rad_to_dms, format_meter, format_mm, format_arcsec, build_disclaimer,
+    build_per_face_direction_values, _TWO_PI, _ARCSEC_PER_RAD,
 )
 
 
@@ -261,6 +262,14 @@ def _traversing_metadata_sheet(wb_excel: Workbook, workbook: TraversingWorkbook)
             ("终点", f"{info.end_point_name} ({info.end_point_x:.3f}, {info.end_point_y:.3f})"),
             ("角度定义", info.angle_definition.value),
         ])
+        if info.start_reference_azimuth is not None:
+            ref_s = f"{info.start_reference_point or '?'}→{info.start_point_name}"
+            ref_e = f"{info.end_point_name}→{info.end_reference_point or '?'}"
+            rows.extend([
+                ("方位基准", f"{ref_s} (起始), {ref_e} (终止)"),
+                ("起始方位角", f"{ref_s} = {rad_to_dms(info.start_reference_azimuth)}"),
+                ("终止方位角", f"{ref_e} = {rad_to_dms(info.end_reference_azimuth)}"),
+            ])
 
     rows.append(("", ""))
     rows.append(("教学声明", build_disclaimer(workbook)))
@@ -272,7 +281,13 @@ def _traversing_metadata_sheet(wb_excel: Workbook, workbook: TraversingWorkbook)
 
 
 def _traversing_angle_sheet(wb_excel: Workbook, workbook: TraversingWorkbook):
-    """Sheet 2: 角度观测."""
+    """Sheet 2: 角度观测.
+
+    格式规则:
+    - 后视行: 仅填读数和 2C, 方向值和归零方向值留空
+    - 前视L行: 填读数、2C、方向值(前视L-后视L), 归零方向值留空
+    - 前视R行: 填读数、2C、方向值(前视R-后视R)、归零方向值(均值)
+    """
     ws = wb_excel.create_sheet("角度观测")
 
     headers = ["测站", "测回", "目标", "盘位", "读数(DMS)", "2C(\")",
@@ -282,19 +297,41 @@ def _traversing_angle_sheet(wb_excel: Workbook, workbook: TraversingWorkbook):
     row = 2
     for obs in workbook.angle_observations:
         for aset in obs.sets:
+            per_face_dv = build_per_face_direction_values(
+                aset, obs.backsight_target)
+
+            # 按 L/R 分组收集前视盘位方向值
+            foresight_dv_groups = {}
+            for (tgt, face), dv in per_face_dv.items():
+                foresight_dv_groups.setdefault(tgt, {})[face] = dv
+
             for dr in aset.directions:
                 two_c = aset.two_c_values_rad.get(dr.target)
-                dv = aset.direction_values_rad.get(dr.target)
-                zdr = aset.zero_reduced_directions_rad.get(dr.target)
+                is_backsight = (dr.target == obs.backsight_target)
+
+                dv_val = per_face_dv.get((dr.target, dr.face.value))
+                dv_str = rad_to_dms(dv_val) if dv_val is not None else ""
+
+                # 归零方向值: 仅前视R行填写
+                zdr_str = ""
+                if (not is_backsight
+                        and dr.face.value == "R"
+                        and dr.target in foresight_dv_groups):
+                    dv_group = foresight_dv_groups[dr.target]
+                    if "L" in dv_group and "R" in dv_group:
+                        zdr = (dv_group["L"] + dv_group["R"]) / 2.0
+                        zdr = zdr % _TWO_PI
+                        zdr_str = rad_to_dms(zdr)
+
                 _write_data_row(ws, row, [
                     obs.station_name,
                     aset.set_number,
                     dr.target,
                     dr.face.value,
                     rad_to_dms(dr.reading_rad),
-                    f"{two_c * 206265:.2f}" if two_c is not None else "",
-                    rad_to_dms(dv) if dv is not None else "",
-                    rad_to_dms(zdr) if zdr is not None else "",
+                    f"{two_c * _ARCSEC_PER_RAD:.2f}" if two_c is not None else "",
+                    "" if is_backsight else dv_str,
+                    zdr_str,
                 ])
                 row += 1
 

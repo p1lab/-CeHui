@@ -121,3 +121,45 @@ def build_disclaimer(workbook) -> str:
                 "本数据基于数学真值假设模拟生成, 不代表RTK实测精度可达目标等级")
 
     return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 导线角度观测: 盘位方向值计算
+# ──────────────────────────────────────────────────────────────────────
+
+_TWO_PI = 2.0 * math.pi
+
+
+def build_per_face_direction_values(aset, backsight_target):
+    """
+    从一测回读数计算各盘位方向值.
+
+    方向值公式:
+        方向值_L = (前视L读数 - 后视L读数) mod 2pi
+        方向值_R = (前视R读数 - 后视R读数) mod 2pi
+
+    返回:
+        Dict[(target, face_value)] -> direction_value_rad
+        仅非后视目标有值.
+    """
+    from ..models.common import Face
+
+    readings = {}
+    for dr in aset.directions:
+        readings[(dr.target, dr.face.value)] = dr.reading_rad
+
+    per_face_dv = {}
+    bs_l = readings.get((backsight_target, Face.LEFT.value))
+    bs_r = readings.get((backsight_target, Face.RIGHT.value))
+
+    for target in set(t for t, _ in readings.keys()):
+        if target == backsight_target:
+            continue
+        fs_l = readings.get((target, Face.LEFT.value))
+        fs_r = readings.get((target, Face.RIGHT.value))
+        if fs_l is not None and bs_l is not None:
+            per_face_dv[(target, Face.LEFT.value)] = (fs_l - bs_l) % _TWO_PI
+        if fs_r is not None and bs_r is not None:
+            per_face_dv[(target, Face.RIGHT.value)] = (fs_r - bs_r) % _TWO_PI
+
+    return per_face_dv

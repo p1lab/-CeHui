@@ -19,7 +19,7 @@ from ..models.traversing import (
 from ..models.common import LevelingGrade, RodType
 from ._utils import (
     rad_to_dms, format_meter, format_mm, format_arcsec, format_optional,
-    build_disclaimer,
+    build_disclaimer, build_per_face_direction_values, _TWO_PI,
 )
 
 
@@ -321,6 +321,12 @@ def _traversing_header_text(wb: TraversingWorkbook) -> str:
             f"终点: {info.end_point_name} ({info.end_point_x:.3f}, {info.end_point_y:.3f})",
             f"角度定义: {info.angle_definition.value}",
         ])
+        if info.start_reference_azimuth is not None:
+            ref_s = f"{info.start_reference_point or '?'}→{info.start_point_name}"
+            ref_e = f"{info.end_point_name}→{info.end_reference_point or '?'}"
+            lines.append(f"方位基准: {ref_s} (起始), {ref_e} (终止)")
+            lines.append(f"起始方位角: {ref_s} = {rad_to_dms(info.start_reference_azimuth)}")
+            lines.append(f"终止方位角: {ref_e} = {rad_to_dms(info.end_reference_azimuth)}")
 
     lines.append("")
     return "\n".join(lines)
@@ -331,7 +337,13 @@ def _traversing_header_text(wb: TraversingWorkbook) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _traversing_angle_table(wb: TraversingWorkbook, is_md: bool) -> str:
-    """导线角度观测表."""
+    """导线角度观测表.
+
+    格式规则:
+    - 后视行: 仅填读数和 2C, 方向值和归零方向值留空
+    - 前视L行: 填读数、2C、方向值(前视L-后视L), 归零方向值留空
+    - 前视R行: 填读数、2C、方向值(前视R-后视R)、归零方向值(均值)
+    """
     headers = [
         "测站", "测回", "目标", "盘位",
         "读数(DMS)", "2C(\")", "方向值", "归零方向值",
@@ -339,10 +351,32 @@ def _traversing_angle_table(wb: TraversingWorkbook, is_md: bool) -> str:
     rows = []
     for obs in wb.angle_observations:
         for aset in obs.sets:
+            per_face_dv = build_per_face_direction_values(
+                aset, obs.backsight_target)
+
+            # 按 L/R 分组收集前视盘位方向值, 用于计算归零方向值
+            foresight_dv_groups = {}
+            for (tgt, face), dv in per_face_dv.items():
+                foresight_dv_groups.setdefault(tgt, {})[face] = dv
+
             for dr in aset.directions:
                 two_c = aset.two_c_values_rad.get(dr.target)
-                dv = aset.direction_values_rad.get(dr.target)
-                zdr = aset.zero_reduced_directions_rad.get(dr.target)
+                is_backsight = (dr.target == obs.backsight_target)
+
+                dv_val = per_face_dv.get((dr.target, dr.face.value))
+                dv_str = rad_to_dms(dv_val) if dv_val is not None else "-"
+
+                # 归零方向值: 仅前视R行填写, = (方向值_L + 方向值_R) / 2
+                zdr_str = "-"
+                if (not is_backsight
+                        and dr.face.value == "R"
+                        and dr.target in foresight_dv_groups):
+                    dv_group = foresight_dv_groups[dr.target]
+                    if "L" in dv_group and "R" in dv_group:
+                        zdr = (dv_group["L"] + dv_group["R"]) / 2.0
+                        zdr = zdr % _TWO_PI
+                        zdr_str = rad_to_dms(zdr)
+
                 rows.append([
                     obs.station_name,
                     str(aset.set_number),
@@ -350,8 +384,8 @@ def _traversing_angle_table(wb: TraversingWorkbook, is_md: bool) -> str:
                     dr.face.value,
                     rad_to_dms(dr.reading_rad),
                     format_arcsec(two_c, 2) if two_c is not None else "-",
-                    rad_to_dms(dv) if dv is not None else "-",
-                    rad_to_dms(zdr) if zdr is not None else "-",
+                    "-" if is_backsight else dv_str,
+                    zdr_str,
                 ])
 
     if is_md:

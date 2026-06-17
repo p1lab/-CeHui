@@ -386,6 +386,22 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 - 往返测限差系数：二等 4√L、三等 12√L、四等 20√L、等外 40√L
 - 268/268 测试通过 (前阶段 259 + 阶段十八 9)
 
+### 阶段十九：导线角度观测手簿格式修正 ✅ 已完成
+
+交付物:
+- `src/formatters/_utils.py` — 新增 `build_per_face_direction_values()` 辅助函数和 `_TWO_PI` 常量，供 text/excel 格式化器共享
+- `src/formatters/text_formatter.py` — `_traversing_angle_table()` 重写：后视行方向值和归零方向值留空，前视L行填方向值、前视R行填方向值和归零方向值
+- `src/formatters/excel_formatter.py` — `_traversing_angle_sheet()` 同步重写，2C 计算改用精确常数 `_ARCSEC_PER_RAD`
+- `tests/test_formatters.py` — 新增 `TestAngleTableFormat`（6项测试）：后视行无方向值、前视L行有方向值无归零、前视R行全填、方向值公式验证、归零方向值均值验证、2C 全行存在
+
+关键技术点:
+- 方向值计算公式: 方向值_L = (前视L读数 − 后视L读数) mod 2π, 方向值_R = (前视R读数 − 后视R读数) mod 2π
+- 归零方向值 = (方向值_L + 方向值_R) / 2, mod 2π
+- 后视行为零方向基准，不计算方向值
+- 2C 值在 L/R 两行填相同值，保持不变
+- JSON 格式化器不做修改（数据模型层面保留全部计算字段）
+- 274/274 测试通过 (前阶段 268 + 阶段十九 6)
+
 待完成:
 - 导线一测回读数较差限差 5mm vs 10mm（待确认测距精度等级）
 

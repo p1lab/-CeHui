@@ -314,3 +314,156 @@ class TestExcelFormatter:
             assert ws.max_row >= 4
         finally:
             os.unlink(filepath)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段十九: 导线角度观测表方向值格式
+# ──────────────────────────────────────────────────────────────────────
+
+class TestAngleTableFormat:
+    """导线角度观测表: 方向值和归零方向值仅填前视行."""
+
+    @pytest.fixture
+    def grade1_wb(self):
+        pts = [("A", 0, 0), ("P1", 100, 50), ("B", 200, 100)]
+        az = normalize_angle(math.atan2(50, 100))
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az, end_azimuth=az,
+            grade=TraverseGrade.GRADE_1, seed=42,
+        )
+        from src.validators.traversing_validator import validate_traversing_workbook
+        validate_traversing_workbook(wb)  # 填充 2C/方向值等计算字段
+        return wb
+
+    def _parse_angle_rows(self, md_text):
+        """从 Markdown 文本解析角度观测表行, 返回数据行列表."""
+        lines = md_text.split("\n")
+        in_angle = False
+        header_seen = False
+        rows = []
+        for line in lines:
+            if "## 水平角观测" in line:
+                in_angle = True
+                continue
+            if in_angle and line.startswith("## "):
+                break  # 下一个 section
+            if not in_angle:
+                continue
+            if line.startswith("| ---"):
+                header_seen = True
+                continue
+            if header_seen and line.startswith("|"):
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                rows.append(cells)
+        return rows
+
+    def test_backsight_rows_no_direction_value(self, grade1_wb):
+        """后视行方向值和归零方向值应为空."""
+        md = workbook_to_markdown(grade1_wb)
+        rows = self._parse_angle_rows(md)
+        assert len(rows) > 0
+
+        obs = grade1_wb.angle_observations
+        backsight_targets = {o.backsight_target for o in obs}
+
+        for row in rows:
+            target = row[2]  # 目标列
+            if target in backsight_targets:
+                dv = row[6]   # 方向值列
+                zdr = row[7]  # 归零方向值列
+                assert dv == "-", f"后视 {target} 方向值应为 '-', 得到 '{dv}'"
+                assert zdr == "-", f"后视 {target} 归零方向值应为 '-', 得到 '{zdr}'"
+
+    def test_foresight_L_has_direction_no_zero_reduced(self, grade1_wb):
+        """前视L行有方向值, 无归零方向值."""
+        md = workbook_to_markdown(grade1_wb)
+        rows = self._parse_angle_rows(md)
+
+        obs = grade1_wb.angle_observations
+        backsight_targets = {o.backsight_target for o in obs}
+
+        count = 0
+        for row in rows:
+            target = row[2]
+            face = row[3]
+            if target not in backsight_targets and face == "L":
+                dv = row[6]
+                zdr = row[7]
+                assert dv != "-", f"前视 {target} L行方向值不应为空"
+                assert zdr == "-", f"前视 {target} L行归零方向值应为空"
+                count += 1
+        assert count > 0, "应至少有一行前视L"
+
+    def test_foresight_R_has_direction_and_zero_reduced(self, grade1_wb):
+        """前视R行有方向值和归零方向值."""
+        md = workbook_to_markdown(grade1_wb)
+        rows = self._parse_angle_rows(md)
+
+        obs = grade1_wb.angle_observations
+        backsight_targets = {o.backsight_target for o in obs}
+
+        count = 0
+        for row in rows:
+            target = row[2]
+            face = row[3]
+            if target not in backsight_targets and face == "R":
+                dv = row[6]
+                zdr = row[7]
+                assert dv != "-", f"前视 {target} R行方向值不应为空"
+                assert zdr != "-", f"前视 {target} R行归零方向值不应为空"
+                count += 1
+        assert count > 0, "应至少有一行前视R"
+
+    def test_direction_value_formula(self, grade1_wb):
+        """方向值 = (前视读数 - 后视读数) mod 360°."""
+        from src.formatters._utils import build_per_face_direction_values, _TWO_PI
+
+        for obs in grade1_wb.angle_observations:
+            for aset in obs.sets:
+                per_face_dv = build_per_face_direction_values(
+                    aset, obs.backsight_target)
+
+                # 从原始读数手动计算
+                readings = {}
+                for dr in aset.directions:
+                    readings[(dr.target, dr.face.value)] = dr.reading_rad
+
+                for (tgt, face), dv in per_face_dv.items():
+                    fs_r = readings[(tgt, face)]
+                    bs_r = readings[(obs.backsight_target, face)]
+                    expected = (fs_r - bs_r) % _TWO_PI
+                    assert abs(dv - expected) < 1e-12, \
+                        f"方向值公式错误: {tgt}/{face}"
+
+    def test_zero_reduced_is_mean_of_LR(self, grade1_wb):
+        """归零方向值 = (方向值_L + 方向值_R) / 2."""
+        from src.formatters._utils import build_per_face_direction_values, _TWO_PI
+
+        for obs in grade1_wb.angle_observations:
+            for aset in obs.sets:
+                per_face_dv = build_per_face_direction_values(
+                    aset, obs.backsight_target)
+
+                # 按目标分组
+                groups = {}
+                for (tgt, face), dv in per_face_dv.items():
+                    groups.setdefault(tgt, {})[face] = dv
+
+                for tgt, dv_map in groups.items():
+                    if "L" in dv_map and "R" in dv_map:
+                        expected = (dv_map["L"] + dv_map["R"]) / 2.0
+                        expected = expected % _TWO_PI
+                        # 检查 R 行的归零方向值
+                        zdr_str = rad_to_dms(expected)
+                        # 不应为空
+                        assert zdr_str != "-", \
+                            f"归零方向值不应为空: {tgt}"
+
+    def test_2c_present_on_all_rows(self, grade1_wb):
+        """2C 值在所有行 (后视+前视, L+R) 都存在."""
+        md = workbook_to_markdown(grade1_wb)
+        rows = self._parse_angle_rows(md)
+
+        for row in rows:
+            two_c = row[5]  # 2C 列
+            assert two_c != "-", f"2C 值不应为空: {row[:4]}"
