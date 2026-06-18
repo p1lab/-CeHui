@@ -12,8 +12,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.models.common import (
-    TraverseGrade, InstrumentGrade, AngleDefinition, SurveyMetadata,
+    TraverseGrade, InstrumentGrade, AngleDefinition, SurveyMetadata, Face,
 )
+from src.models.traversing import StationAngleObservation
 from src.generators.traversing_generator import generate_traversing_workbook
 from src.validators.traversing_validator import (
     validate_traversing_workbook, normalize_angle,
@@ -278,7 +279,9 @@ class TestMetadata:
         assert gm is not None
         assert gm.target_grade == "grade_1"
         assert gm.random_seed == 42
-        assert gm.angle_sigma_arcsec == 0.5
+        # angle_sigma_arcsec 已不再使用 (后视读数精确为 L0, 无方向扰动)
+        assert gm.angle_sigma_arcsec is None
+        assert gm.angle_set_sigma_arcsec == 2.0
         assert gm.distance_sigma_mm == 0.5
 
 
@@ -414,6 +417,80 @@ class TestInstrumentPrismHeights:
 
         edge_pb = [e for e in wb.distance_observations if e.from_point == "P1"][0]
         assert edge_pb.instrument_height_m == 1.60  # 使用指定值
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段二十九：后视盘左读数精确为度盘零位
+# ──────────────────────────────────────────────────────────────────────
+
+class TestBacksightLeftReadingExact:
+    """后视盘左读数必须精确等于度盘零位 L0, 不应被随机扰动.
+
+    原因: 实际方向观测法中, 观测员先瞄准后视目标再人为置盘,
+    因此后视读数是主动设定的参考基准.
+    本测试防止阶段二十八的 delta_dir 设计再次回归.
+    """
+
+    def _get_backsight_left(self, obs: StationAngleObservation,
+                            set_number: int) -> float:
+        s = obs.sets[set_number - 1]
+        for d in s.directions:
+            if d.target == obs.backsight_target and d.face == Face.LEFT:
+                return d.reading_rad
+        raise ValueError("未找到后视盘左读数")
+
+    def test_backsight_left_exactly_degree_plate_zero(self):
+        """多测回、多种子下, 后视盘左读数始终精确等于 L0"""
+        pts = [("A", 1000.0, 1000.0), ("P1", 1100.0, 1050.0),
+               ("B", 1200.0, 1100.0)]
+        az_s = _azimuth(1000, 1000, 1100, 1050)
+        az_e = _azimuth(1100, 1050, 1200, 1100)
+        for seed in [1, 7, 42, 99, 2026]:
+            wb = generate_traversing_workbook(
+                points=pts, start_azimuth=az_s, end_azimuth=az_e,
+                grade=TraverseGrade.GRADE_1, num_angle_sets=2, seed=seed,
+            )
+            for obs in wb.angle_observations:
+                for set_idx, s in enumerate(obs.sets, start=1):
+                    L0 = s.degree_plate_zero_rad
+                    L_back = self._get_backsight_left(obs, set_idx)
+                    assert abs(normalize_angle(L_back - L0)) < 1e-12, \
+                        (f"站 {obs.station_name} 测回 {set_idx}: "
+                         f"后视盘左读数 {L_back} 不精确等于 L0 {L0}")
+
+    def test_backsight_left_matches_degree_plate_zero_with_offset(self):
+        """即使有度盘偏移, 后视盘左读数仍精确等于 L0"""
+        pts = [("A", 0.0, 0.0), ("P1", 100.0, 50.0), ("B", 200.0, 100.0)]
+        az_s = _azimuth(0, 0, 100, 50)
+        az_e = _azimuth(100, 50, 200, 100)
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=az_s, end_azimuth=az_e,
+            grade=TraverseGrade.GRADE_1, num_angle_sets=2, seed=42,
+        )
+        for obs in wb.angle_observations:
+            for set_idx, s in enumerate(obs.sets, start=1):
+                L0 = s.degree_plate_zero_rad
+                L_back = self._get_backsight_left(obs, set_idx)
+                # 取模到 [0, 2π) 后比较
+                diff = (L_back - L0) % (2 * math.pi)
+                assert abs(diff) < 1e-12 or abs(diff - 2 * math.pi) < 1e-12
+
+    def test_foresight_left_not_forced_to_zero(self):
+        """前视盘左读数不为 L0, 验证只有后视被精确置盘"""
+        pts = [("A", 0.0, 0.0), ("P1", 100.0, 0.0), ("B", 200.0, 0.0)]
+        wb = generate_traversing_workbook(
+            points=pts, start_azimuth=0.0, end_azimuth=0.0,
+            grade=TraverseGrade.GRADE_1, num_angle_sets=1, seed=42,
+        )
+        obs = wb.angle_observations[0]
+        s = obs.sets[0]
+        L0 = s.degree_plate_zero_rad
+        for d in s.directions:
+            if d.target == obs.backsight_target and d.face == Face.LEFT:
+                assert abs(d.reading_rad - L0) < 1e-12
+            elif d.target == obs.foresight_target and d.face == Face.LEFT:
+                # 前视读数应接近 L0 + 180° (直线点), 不等于 L0
+                assert abs(d.reading_rad - L0) > 1e-3
 
 
 # ──────────────────────────────────────────────────────────────────────

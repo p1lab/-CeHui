@@ -6,24 +6,24 @@
   },
 
   "degree_plate_config": {
-    "_description": "水平度盘零位配置公式",
+    "_description": "水平度盘零位配置公式 (教学演示用: 后视读数精确为 0°/90°/...)",
     "formula": "L_0_j = (pi / m) * (j - 1) + offset",
     "formula_degrees": "L_0_j = (180 / m) * (j - 1) + offset",
-    "offset_arcsec": 150,
-    "offset_radians": 0.000727,
-    "offset_dms": "0°02'30\"",
+    "offset_arcsec": 0,
+    "offset_radians": 0.0,
+    "offset_dms": "0°00'00\"",
     "examples": {
       "2_sets": {
-        "set_1_dms": "0°02'30\"",
-        "set_1_rad": 0.000727,
-        "set_2_dms": "90°02'30\"",
-        "set_2_rad": 1.571523
+        "set_1_dms": "0°00'00\"",
+        "set_1_rad": 0.0,
+        "set_2_dms": "90°00'00\"",
+        "set_2_rad": 1.570796
       },
       "4_sets": {
-        "set_1_dms": "0°02'30\"",
-        "set_2_dms": "45°02'30\"",
-        "set_3_dms": "90°02'30\"",
-        "set_4_dms": "135°02'30\""
+        "set_1_dms": "0°00'00\"",
+        "set_2_dms": "45°00'00\"",
+        "set_3_dms": "90°00'00\"",
+        "set_4_dms": "135°00'00\""
       }
     }
   },

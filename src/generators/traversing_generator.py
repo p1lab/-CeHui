@@ -118,13 +118,19 @@ def _gen_station_angle(
     """
     生成单站角度观测.
 
+    设计决策 (2026-06-18):
+        后视盘左读数必须精确等于度盘零位 L0.
+        原因: 实际方向观测法中, 观测员先瞄准后视目标, 再人为置盘,
+        因此后视读数是主动设定的参考基准, 不应带随机扰动.
+        阶段二十八曾引入 delta_dir 同加于所有方向, 导致后视读数不再
+        精确归零/归 90°, 已在本阶段回退.
+
     核空间约束:
-        同一测站同一测回, 所有方向施加相同的 delta_dir 扰动.
-        水平角 = direction_value[fore] - direction_value[back]
-        因 delta_dir 相同, 相减时抵消 → 水平角精确不变.
+        后视盘左精确为 L0; 前视盘左 = L0 + lbar + delta_set + delta_2c/2.
+        水平角 = 前视方向值 - 后视方向值 = lbar + delta_set (含测回间分散).
 
     测回间扰动 (真实性改进):
-        各测回的 beta_set 施加独立微小扰动 delta_set,
+        各测回的 beta_set 施加独立微小扰动 delta_set (仅前视),
         使测回间角值存在自然分散 (sigma_set_arcsec 控制).
 
     2C 控制:
@@ -143,10 +149,8 @@ def _gen_station_angle(
     angle_sets = []
     for j in range(num_sets):
         # 度盘零位 (config: L_0_j = π/m * j + offset)
+        # 后视盘左读数精确等于 L0 (0°, 90°, 180°, ...)
         L0 = (math.pi / num_sets) * j + degree_plate_offset_rad
-
-        # delta_dir: 同一测站同一测回所有方向共同扰动 (度盘零位不确定性)
-        delta_dir = truncated_normal(sigma_dir_rad, k=truncation_k, rng=rng)
 
         # 测回间角值扰动 (真实性改进: 各测回独立, 仅前视)
         delta_set = truncated_normal(sigma_set_rad, k=truncation_k, rng=rng)
@@ -166,16 +170,17 @@ def _gen_station_angle(
             delta_2c = truncated_normal(sigma_2c_rad / 2.0, k=truncation_k, rng=rng)
 
             if target == back_name:
-                # 后视盘左/盘右: 所有方向共同加 delta_dir, 再叠加 2C 效应
-                L = L0 + delta_dir
+                # 后视盘左: 无扰动 (观测员瞄准后视设定度盘读数)
+                L = L0
                 L = normalize_angle(L)
-                R = L0 + delta_dir - delta_2c + math.pi
+                # 后视盘右: 仅有 2C 效应, 无方向扰动
+                R = L0 - delta_2c + math.pi
                 R = normalize_angle(R)
             else:
-                # 前视盘左/盘右: delta_dir + 方向值 + 测回间扰动 + 2C 效应
-                L = L0 + delta_dir + lbar + target_delta_set + delta_2c / 2.0
+                # 前视: 正常扰动 (含 delta_set, delta_2c)
+                L = L0 + lbar + target_delta_set + delta_2c / 2.0
                 L = normalize_angle(L)
-                R = L0 + delta_dir + lbar + target_delta_set - delta_2c / 2.0 + math.pi
+                R = L0 + lbar + target_delta_set - delta_2c / 2.0 + math.pi
                 R = normalize_angle(R)
 
             directions.append(
@@ -814,7 +819,8 @@ def generate_traversing_workbook(
             target_grade=grade.value,
             random_seed=seed,
             truncation_k=truncation_k,
-            angle_sigma_arcsec=ap["sigma_arcsec"],
+            # 后视读数精确为 L0, 不再使用 sigma_dir/delta_dir 方向扰动
+            angle_sigma_arcsec=None,
             angle_set_sigma_arcsec=ap["sigma_set_arcsec"],
             distance_sigma_mm=dp["sigma_mm"],
             distance_reading_sigma_mm=dp["sigma_reading_mm"],

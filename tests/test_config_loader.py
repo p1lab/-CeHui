@@ -47,7 +47,8 @@ def test_load_observation_program_config_default():
     """默认路径应成功加载 config_observation_program.json"""
     cfg = load_observation_program_config()
     assert "degree_plate_config" in cfg
-    assert cfg["degree_plate_config"]["offset_arcsec"] == 150
+    # 教学演示用: 度盘偏移设为 0, 后视读数精确为 0°/90°
+    assert cfg["degree_plate_config"]["offset_arcsec"] == 0
 
 
 def test_load_missing_config_returns_empty():
@@ -136,10 +137,10 @@ def test_get_traversing_limits_grade1():
 
 
 def test_get_degree_plate_offset_rad():
-    """度盘零位偏移正确"""
+    """度盘零位偏移正确 (教学演示用: 0°, 后视读数精确为 0°/90°)"""
     cfg = load_observation_program_config()
     offset = get_degree_plate_offset_rad(cfg)
-    assert abs(offset - math.radians(150.0 / 3600.0)) < 1e-6
+    assert abs(offset - math.radians(0.0 / 3600.0)) < 1e-6
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -191,7 +192,9 @@ def test_custom_traversing_config_affects_generation():
             grade=TraverseGrade.GRADE_1, num_angle_sets=1,
             seed=42, config_path=cfg_path,
         )
-        assert wb.generation_metadata.angle_sigma_arcsec == 10.0
+        # angle_sigma_arcsec 已不再使用, 置为 None
+        assert wb.generation_metadata.angle_sigma_arcsec is None
+        assert wb.generation_metadata.angle_set_sigma_arcsec == 2.0
         assert wb.generation_metadata.distance_sigma_mm == 10.0
     finally:
         os.unlink(cfg_path)
