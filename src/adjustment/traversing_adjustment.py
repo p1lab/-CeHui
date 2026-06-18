@@ -124,22 +124,17 @@ def adjust_traverse(comp: TraverseComputation) -> None:
 
     f_beta_rad = f_beta_arcsec / _RO_ARCSEC
 
-    # 每个角度的改正数（弧度，精确值）
-    v_beta_rad = -f_beta_rad / n_angles
-
     # 角度改正数离散化到 0.1" 步长，余数分配给短边
     step_arcsec = 0.1  # 离散化步长（角秒）
-    v_beta_arcsec_per = v_beta_rad * _RO_ARCSEC
+    needed_total = -f_beta_arcsec
 
-    # 基础改正数（每个角）
-    base_steps = math.floor(v_beta_arcsec_per / step_arcsec)
+    # 先按四舍五入得到均分基础改正数（避免 floor 的负向偏置）
+    base_steps = int(round(needed_total / n_angles / step_arcsec))
     corrections_arcsec = [base_steps * step_arcsec] * n_angles
 
-    # 总改正量与需求改正量的差
-    total_allocated = base_steps * step_arcsec * n_angles
-    needed_total = -f_beta_arcsec
-    shortfall = needed_total - total_allocated  # 尚需分配的角秒
-    n_extra = int(round(shortfall / step_arcsec))
+    # 计算与目标总改正量的差额，按 0.1" 整数倍分配给短边
+    residual_arcsec = needed_total - sum(corrections_arcsec)
+    n_extra = int(round(residual_arcsec / step_arcsec))
 
     # 余数分配给短边（距离短的边角度不确定性更大）
     # 虚拟边（distance_m=None）排最后
@@ -159,7 +154,7 @@ def adjust_traverse(comp: TraverseComputation) -> None:
     # 检核：SUM(v_beta) = -f_beta（0.1" 精度内）
     sum_v_beta_arcsec = sum(corrections_arcsec)
     _check = abs(sum_v_beta_arcsec - needed_total)
-    assert _check < step_arcsec * 0.5, (
+    assert _check < step_arcsec * 0.5 + 1e-9, (
         f"SUM(v_beta)={sum_v_beta_arcsec:.2f}\" ≠ "
         f"-f_beta={needed_total:.2f}\""
     )

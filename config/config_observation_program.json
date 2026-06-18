@@ -108,7 +108,13 @@
       "sight_height_buffer_m": [1.5, 2.5],
       "_buffer_note": "视线高 = max(H_back, H_fore) + uniform(buffer)",
       "reading_range_m": [0.3, 2.5],
-      "distance_stadia_constant": 100
+      "distance_stadia_constant": 100,
+      "height_diff_distribution_sigma_m": 0.02,
+      "_height_diff_note": "高差分配零和偏差的 sigma, 截断于 [-k*sigma, k*sigma]",
+      "extra_reading_range_m": [0.8, 2.0],
+      "_extra_reading_note": "等外水准第一次仪高对应的后视读数范围",
+      "extra_height_shift_range_m": [0.15, 0.25],
+      "_extra_shift_note": "等外水准两次仪高变动量范围"
     },
 
     "traversing": {

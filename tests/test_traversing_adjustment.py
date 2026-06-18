@@ -23,7 +23,9 @@ from src.generators.traversing_generator import generate_traversing_workbook
 from src.validators.traversing_validator import (
     validate_traversing_workbook, normalize_angle,
 )
-from src.adjustment.traversing_adjustment import adjust_traverse
+from src.adjustment.traversing_adjustment import (
+    adjust_traverse, _compute_azimuth_closure_arcsec,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -163,7 +165,10 @@ class TestCorrectionSumCheck:
         comp = wb.computation
         angle_edges = [er for er in comp.edge_records if er.observed_angle_rad is not None]
         sum_v = sum(er.angle_correction_rad for er in angle_edges)
-        f_beta = comp.azimuth_closure_error_arcsec or 0.0
+        # 生成器未设置方位角闭合差，由平差内部计算；测试直接复用同一算法
+        f_beta = comp.azimuth_closure_error_arcsec
+        if f_beta is None:
+            f_beta = _compute_azimuth_closure_arcsec(comp)
         _RO = 180.0 * 3600.0 / math.pi
         # 精度 0.1" × n_angles
         tol = 0.1 * len(angle_edges) / _RO

@@ -24,6 +24,7 @@ from ..validators.traversing_validator import (
     validate_traversing_workbook, normalize_angle,
 )
 from ..generators._utils import rad_to_arcsec
+from ..config_loader import load_traversing_config, get_traversing_limits
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -445,7 +446,7 @@ def check_traversing_compliance(
 
     参数:
         workbook: 导线观测手簿
-        config_path: 配置文件路径 (保留接口, 当前使用内置限差)
+        config_path: 配置文件路径 (None=使用默认, 默认=config/config_traversing.json)
 
     返回:
         TraversingComplianceReport
@@ -459,7 +460,12 @@ def check_traversing_compliance(
     inst_key = _get_instrument_key(inst_grade)
 
     # 按等级选取限差字典
-    grade_limits = _TRAVERSING_LIMITS.get(grade, _TRAVERSING_LIMITS[TraverseGrade.GRADE_1])
+    cfg = load_traversing_config(config_path)
+    if cfg:
+        grade_limits = get_traversing_limits(cfg, grade)
+    else:
+        grade_limits = _TRAVERSING_LIMITS.get(
+            grade, _TRAVERSING_LIMITS[TraverseGrade.GRADE_1])
 
     # 按观测方法选取限差子字典
     # 若指定方法不存在, 回退到方向观测法

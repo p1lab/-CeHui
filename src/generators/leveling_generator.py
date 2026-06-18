@@ -28,6 +28,10 @@ from ..models.leveling import (
     ExtraLevelingStation, LevelingSection, ExtraLevelingSection,
     LevelingWorkbook, ObservationSequence,
 )
+from ..config_loader import (
+    load_leveling_config, load_observation_program_config,
+    get_leveling_grade_params, get_leveling_round_trip_coeff,
+)
 from ._utils import truncated_normal, mm_to_m, round_reading
 
 
@@ -59,6 +63,7 @@ DEFAULT_ROD_SPECS = {
 _GRADE_PARAMS = {
     LevelingGrade.GRADE_2: {
         "sigma_mm": 0.05,
+        "base_aux_sigma_mm": 0.15,
         "sight_dist_range": (20.0, 50.0),
         "dist_diff_max": 0.8,
         "reading_dp": 4,
@@ -103,19 +108,25 @@ _ROUND_TRIP_LIMIT_COEFF = {
 # ──────────────────────────────────────────────────────────────────────
 
 def _distribute_height_diffs(
-    dh_total: float, n: int, rng: np.random.Generator
+    dh_total: float, n: int, rng: np.random.Generator,
+    height_diff_sigma_m: float = 0.02,
+    truncation_k: float = 3.0,
 ) -> List[float]:
     """
     将总高差分配到各站, 保证 sum = dh_total.
 
-    方法: 均分 + 零和随机偏差 (最后一站吸收余量).
+    方法: 均分 + 零和截断正态偏差 (最后一站吸收余量).
     """
     if n == 1:
         return [dh_total]
 
     dh_base = dh_total / n
-    epsilons = rng.uniform(-0.05, 0.05, size=n - 1)
+    epsilons = [
+        truncated_normal(height_diff_sigma_m, k=truncation_k, rng=rng)
+        for _ in range(n - 1)
+    ]
     # 使 epsilons 零和: 减去均值
+    epsilons = np.array(epsilons)
     epsilons -= epsilons.mean()
     last_eps = -epsilons.sum()  # 精确使总和为零
 
@@ -134,6 +145,7 @@ def _gen_double_face_station(
     sigma_m: float, reading_dp: int,
     params: dict, rng: np.random.Generator,
     k_back: float, k_fore: float,
+    truncation_k: float = 3.0,
 ) -> dict:
     """
     生成双面尺测站数据 (返回字段字典).
@@ -156,7 +168,7 @@ def _gen_double_face_station(
     b_red = k_fore + b_black
 
     # 3. 核空间扰动 (同一个 delta 加到所有中丝读数)
-    delta = truncated_normal(sigma_m, rng=rng)
+    delta = truncated_normal(sigma_m, k=truncation_k, rng=rng)
 
     a_black_p = a_black + delta
     a_red_p = a_red + delta
@@ -210,14 +222,17 @@ def _gen_double_face_station(
 def _gen_invar_station(
     station_num: int, back_name: str, fore_name: str,
     dh: float, h_back: float, h_fore: float,
-    sigma_m: float, reading_dp: int,
+    sigma_m: float, base_aux_sigma_m: float, reading_dp: int,
     params: dict, rng: np.random.Generator,
     c_aux: float,
+    truncation_k: float = 3.0,
 ) -> dict:
     """
     生成因瓦基辅分划测站数据.
 
-    核空间约束: delta 同时加到 basic, aux (后视+前视).
+    核空间约束:
+    - delta 同时加到 basic, aux (后视+前视), 保证 h_basic 不变
+    - epsilon 同时加到后视和前视的 aux, 保证 h_aux = h_basic
     """
     buf_lo, buf_hi = params["buffer"]
     sd_lo, sd_hi = params["sight_dist_range"]
@@ -230,20 +245,28 @@ def _gen_invar_station(
     a_aux = a_basic + c_aux
     b_aux = b_basic + c_aux
 
-    delta = truncated_normal(sigma_m, rng=rng)
+    delta = truncated_normal(sigma_m, k=truncation_k, rng=rng)
+    # 基/辅读数通道独立噪声，同一 epsilon 同时加在后视和前视 aux 上，
+    # 保证 h_aux = h_basic 仍然精确成立
+    epsilon = truncated_normal(base_aux_sigma_m, k=truncation_k, rng=rng)
 
     a_basic_p = a_basic + delta
-    a_aux_p = a_aux + delta
     b_basic_p = b_basic + delta
-    b_aux_p = b_aux + delta
+    # 从 a_aux_p 和高差 dh 推导 b_aux_p，保证未取整时 h_aux = dh
+    a_aux_p = a_basic_p + c_aux + epsilon
+    b_aux_p = a_aux_p - dh
 
     assert abs((a_basic_p - b_basic_p) - dh) < 1e-12, \
-        f"核空间约束违反: 站{station_num}"
+        f"核空间约束违反: 站{station_num} basic 高差"
+    assert abs((a_aux_p - b_aux_p) - dh) < 1e-12, \
+        f"核空间约束违反: 站{station_num} aux 高差"
 
     a_basic_r = round_reading(a_basic_p, reading_dp)
-    a_aux_r = round_reading(a_aux_p, reading_dp)
     b_basic_r = round_reading(b_basic_p, reading_dp)
-    b_aux_r = round_reading(b_aux_p, reading_dp)
+    # 先取整 a_aux，再由 h_basic_r 推导 b_aux_r，保证取整后 h_aux = h_basic
+    a_aux_r = round_reading(a_aux_p, reading_dp)
+    h_basic_r = a_basic_r - b_basic_r
+    b_aux_r = round_reading(a_aux_r - h_basic_r, reading_dp)
 
     s_back = rng.uniform(sd_lo, sd_hi)
     s_fore = rng.uniform(
@@ -283,6 +306,9 @@ def _gen_extra_station(
     dh: float, h_back: float, h_fore: float,
     sigma_m: float, reading_dp: int,
     rng: np.random.Generator,
+    truncation_k: float = 3.0,
+    extra_reading_range_m: Tuple[float, float] = (0.8, 2.0),
+    extra_height_shift_range_m: Tuple[float, float] = (0.15, 0.25),
 ) -> dict:
     """
     生成等外水准测站 (变动仪高法).
@@ -290,18 +316,21 @@ def _gen_extra_station(
     两次仪高, 相差 >= 10 cm.
     核空间约束: 每对读数施加同向等量扰动.
     """
+    r_lo, r_hi = extra_reading_range_m
+    s_lo, s_hi = extra_height_shift_range_m
+
     # 第一次仪高
-    a1_exact = rng.uniform(0.8, 2.0)
+    a1_exact = rng.uniform(r_lo, r_hi)
     b1_exact = a1_exact - dh
 
-    # 第二次仪高 (变动 >= 10 cm, 取 15-25 cm)
-    shift = rng.uniform(0.15, 0.25)
+    # 第二次仪高 (变动 >= 10 cm)
+    shift = rng.uniform(s_lo, s_hi)
     a2_exact = a1_exact + shift
     b2_exact = a2_exact - dh
 
     # 核空间扰动 (每对独立采样, 但同对内 delta 相同)
-    delta1 = truncated_normal(sigma_m, rng=rng)
-    delta2 = truncated_normal(sigma_m, rng=rng)
+    delta1 = truncated_normal(sigma_m, k=truncation_k, rng=rng)
+    delta2 = truncated_normal(sigma_m, k=truncation_k, rng=rng)
 
     return {
         "station_number": station_num,
@@ -459,6 +488,8 @@ def generate_leveling_workbook(
     observation_sequence: str = "alternate",
     target_closure_ratio: float = 0.0,
     target_round_trip_ratio: float = 0.0,
+    round_trip_split_ratio: float = 0.5,
+    config_path: Optional[str] = None,
 ) -> LevelingWorkbook:
     """
     从 RTK 高程真值逆向生成水准观测手簿.
@@ -477,6 +508,8 @@ def generate_leveling_workbook(
         observation_sequence: "alternate"=奇偶站交替, "uniform"=统一顺序
         target_closure_ratio: 目标闭合差/限差比值 (0-1, 默认0=精确零)
         target_round_trip_ratio: 目标往返不符值/限差比值 (0-1, 默认0=精确零)
+        round_trip_split_ratio: 往返不符值在往测/返测间的拆分比例 (0-1, 默认0.5=对称)
+        config_path: 水准配置文件路径 (None=使用默认 config/config_leveling.json)
 
     返回:
         LevelingWorkbook (可通过 validate_leveling_workbook 验证)
@@ -488,9 +521,31 @@ def generate_leveling_workbook(
         - 读数精度: 按等级取整 (二等 0.1mm, 三四等 1mm)
     """
     rng = np.random.default_rng(seed)
-    params = _GRADE_PARAMS[grade]
+
+    # 从配置文件加载参数 (失败时回退到内置 _GRADE_PARAMS)
+    lvl_cfg = load_leveling_config(config_path)
+    prog_cfg = load_observation_program_config(None)
+    if lvl_cfg:
+        params = get_leveling_grade_params(lvl_cfg, prog_cfg, grade)
+        rt_coeff = get_leveling_round_trip_coeff(lvl_cfg, grade)
+    else:
+        params = _GRADE_PARAMS[grade]
+        rt_coeff = _ROUND_TRIP_LIMIT_COEFF.get(grade, 12.0)
+
     sigma_m = mm_to_m(params["sigma_mm"])
+    base_aux_sigma_m = mm_to_m(params.get("base_aux_sigma_mm", 0.0))
     reading_dp = params["reading_dp"]
+
+    # 从观测程序配置读取扰动分布参数 (配置优先)
+    default_sim = prog_cfg.get("default_simulation_parameters", {})
+    truncation_k = default_sim.get("truncation_k", truncation_k)
+    leveling_sim = default_sim.get("leveling", {})
+    height_diff_sigma_m = leveling_sim.get(
+        "height_diff_distribution_sigma_m", 0.02)
+    extra_reading_range_m = tuple(leveling_sim.get(
+        "extra_reading_range_m", [0.8, 2.0]))
+    extra_height_shift_range_m = tuple(leveling_sim.get(
+        "extra_height_shift_range_m", [0.15, 0.25]))
 
     # 默认尺型
     if rod_back is None or rod_fore is None:
@@ -518,11 +573,16 @@ def generate_leveling_workbook(
         route=route, grade=grade, num_stations=num_stations,
         rod_back=rod_back, rod_fore=rod_fore,
         metadata=metadata, section_id=section_id,
-        sigma_m=sigma_m, reading_dp=reading_dp, params=params, rng=rng,
+        sigma_m=sigma_m, base_aux_sigma_m=base_aux_sigma_m,
+        reading_dp=reading_dp, params=params, rng=rng,
         is_extra=is_extra,
         observation_sequence_mode=observation_sequence,
         is_outbound=True,
         target_closure_ratio=effective_closure_ratio,
+        truncation_k=truncation_k,
+        height_diff_sigma_m=height_diff_sigma_m,
+        extra_reading_range_m=extra_reading_range_m,
+        extra_height_shift_range_m=extra_height_shift_range_m,
     )
 
     sections = [outbound_section]
@@ -547,25 +607,34 @@ def generate_leveling_workbook(
             route=return_route, grade=grade, num_stations=num_stations,
             rod_back=rod_back, rod_fore=rod_fore,
             metadata=metadata, section_id=return_section_id,
-            sigma_m=sigma_m, reading_dp=reading_dp, params=params, rng=rng,
+            sigma_m=sigma_m, base_aux_sigma_m=base_aux_sigma_m,
+            reading_dp=reading_dp, params=params, rng=rng,
             is_extra=False,
             observation_sequence_mode=observation_sequence,
             is_outbound=False,
             target_closure_ratio=effective_closure_ratio,
+            truncation_k=truncation_k,
+            height_diff_sigma_m=height_diff_sigma_m,
+            extra_reading_range_m=extra_reading_range_m,
+            extra_height_shift_range_m=extra_height_shift_range_m,
         )
         sections.append(return_section)
 
         # ── 往返测残差: 使不符值非零且受控 ──
         if target_round_trip_ratio > 0:
             L_km = route.total_length_km or 1.0
-            coeff = _ROUND_TRIP_LIMIT_COEFF.get(grade, 12.0)
+            coeff = rt_coeff
             limit_mm = coeff * math.sqrt(L_km)
             target_m = target_round_trip_ratio * limit_mm / 1000.0
             sign = rng.choice([-1.0, 1.0])
-            # 分摊到往测和返测, 各自闭合差 = half_residual, 往返不符值 = target
-            half_residual_m = target_m * sign / 2.0
-            _apply_round_trip_residual(sections[0], half_residual_m, reading_dp)
-            _apply_round_trip_residual(sections[1], half_residual_m, reading_dp)
+            # 非对称分摊: round_trip_split_ratio 控制往测承担比例
+            # 往返不符值 = |r_out + r_ret| = target (保持不变)
+            # 中数路线闭合差 = (r_ret - r_out) / 2, 当 split != 0.5 时非零
+            split = max(0.0, min(1.0, round_trip_split_ratio))
+            outbound_residual_m = target_m * split * sign
+            return_residual_m = target_m * (1.0 - split) * sign
+            _apply_round_trip_residual(sections[0], outbound_residual_m, reading_dp)
+            _apply_round_trip_residual(sections[1], return_residual_m, reading_dp)
 
     # ── 构造 Workbook ──
     if is_extra:
@@ -582,6 +651,8 @@ def generate_leveling_workbook(
             random_seed=seed,
             truncation_k=truncation_k,
             leveling_sigma_mm=params["sigma_mm"],
+            base_aux_perturbation_sigma_mm=params.get("base_aux_sigma_mm"),
+            round_trip_split_ratio=round_trip_split_ratio if (round_trip and target_round_trip_ratio > 0) else None,
         ),
     )
 
@@ -592,7 +663,7 @@ def generate_leveling_workbook(
         # 往测高差 + 返测高差，理论为 0 (h_往 = -(h_返))
         discrepancy_mm = abs(h_outbound + h_return) * 1000.0
         L_km = route.total_length_km or 1.0
-        coeff = _ROUND_TRIP_LIMIT_COEFF.get(grade, 12.0)
+        coeff = rt_coeff
         limit_mm = coeff * math.sqrt(L_km)
         workbook.round_trip_discrepancy_mm = float(discrepancy_mm)
         workbook.round_trip_limit_mm = float(limit_mm)
@@ -719,6 +790,7 @@ def _generate_single_section(
     metadata: SurveyMetadata,
     section_id: str,
     sigma_m: float,
+    base_aux_sigma_m: float,
     reading_dp: int,
     params: dict,
     rng: np.random.Generator,
@@ -726,6 +798,10 @@ def _generate_single_section(
     observation_sequence_mode: str = "uniform",
     is_outbound: bool = True,
     target_closure_ratio: float = 0.0,
+    truncation_k: float = 3.0,
+    height_diff_sigma_m: float = 0.02,
+    extra_reading_range_m: Tuple[float, float] = (0.8, 2.0),
+    extra_height_shift_range_m: Tuple[float, float] = (0.15, 0.25),
 ):
     """
     生成单个测段 (往测或返测).
@@ -745,7 +821,11 @@ def _generate_single_section(
     exact_height_diffs = [heights[i + 1] - heights[i] for i in range(n)]
 
     # 随机微扰高差 (保持总和精确 = dh_total)
-    height_diffs = _distribute_height_diffs(dh_total, n, rng)
+    height_diffs = _distribute_height_diffs(
+        dh_total, n, rng,
+        height_diff_sigma_m=height_diff_sigma_m,
+        truncation_k=truncation_k,
+    )
 
     # 有中间控制点时: 使用精确高差 (保证经过控制点的高程正确)
     # 无中间控制点时: 使用随机分配的高差 (原有行为)
@@ -763,13 +843,17 @@ def _generate_single_section(
                 i + 1, point_names[i], point_names[i + 1],
                 use_height_diffs[i], heights[i], heights[i + 1],
                 sigma_m, reading_dp, rng,
+                truncation_k=truncation_k,
+                extra_reading_range_m=extra_reading_range_m,
+                extra_height_shift_range_m=extra_height_shift_range_m,
             )
         elif rod_back.rod_type == RodType.INVAR_BASIC_AUX:
             sd = _gen_invar_station(
                 i + 1, point_names[i], point_names[i + 1],
                 use_height_diffs[i], heights[i], heights[i + 1],
-                sigma_m, reading_dp, params, rng,
+                sigma_m, base_aux_sigma_m, reading_dp, params, rng,
                 rod_back.c_aux_m or 3.0155,
+                truncation_k=truncation_k,
             )
         else:  # DOUBLE_FACE
             sd = _gen_double_face_station(
@@ -778,6 +862,7 @@ def _generate_single_section(
                 sigma_m, reading_dp, params, rng,
                 rod_back.k_value_m or 4.687,
                 rod_fore.k_value_m or 4.787,
+                truncation_k=truncation_k,
             )
 
         # ── 设置点类型 (前视点类型) ──
@@ -834,6 +919,32 @@ def _generate_single_section(
                 station_data_list[-1], route, grade,
                 target_closure_ratio, reading_dp, rng,
                 is_extra=False, rod=rod_back)
+
+    # ── 填充读数检核字段 (供格式化器直接使用, 无需先运行验证器) ──
+    if not is_extra:
+        if rod_back.rod_type == RodType.INVAR_BASIC_AUX:
+            c_aux = rod_back.c_aux_m or 3.0155
+            for sd in station_data_list:
+                bs = sd["backsight"]
+                fs = sd["foresight"]
+                sd["base_aux_reading_diff_back_mm"] = (
+                    bs.black_mid_m + c_aux - bs.aux_mid_m
+                ) * 1000.0
+                sd["base_aux_reading_diff_fore_mm"] = (
+                    fs.black_mid_m + c_aux - fs.aux_mid_m
+                ) * 1000.0
+        else:
+            k_back = rod_back.k_value_m or 4.687
+            k_fore = rod_fore.k_value_m or 4.787
+            for sd in station_data_list:
+                bs = sd["backsight"]
+                fs = sd["foresight"]
+                sd["k_plus_black_minus_red_back_mm"] = (
+                    k_back + bs.black_mid_m - bs.red_mid_m
+                ) * 1000.0
+                sd["k_plus_black_minus_red_fore_mm"] = (
+                    k_fore + fs.black_mid_m - fs.red_mid_m
+                ) * 1000.0
 
     # ── 构造模型对象 ──
     if is_extra:

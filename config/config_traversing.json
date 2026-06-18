@@ -88,6 +88,10 @@
       "angle_perturbation_sigma_arcsec": 0.5,
       "distance_perturbation_sigma_mm": 0.5,
       "_sigma_source": "error_propagation.md A4.2 参考表",
+      "2c_perturbation_sigma_arcsec": 3.0,
+      "set_perturbation_sigma_arcsec": 2.0,
+      "distance_reading_sigma_mm": 1.2,
+      "reading_diff_sigma_mm": 1.0,
       "2c_range_arcsec": [
         -6.5,
         6.5
@@ -130,7 +134,11 @@
     "simulation": {
       "angle_perturbation_sigma_arcsec": 2.0,
       "distance_perturbation_sigma_mm": 2.0,
-      "_sigma_source": "error_propagation.md A4.2 参考表 (三等行)"
+      "_sigma_source": "error_propagation.md A4.2 参考表 (三等行)",
+      "2c_perturbation_sigma_arcsec": 6.0,
+      "set_perturbation_sigma_arcsec": 4.0,
+      "distance_reading_sigma_mm": 1.2,
+      "reading_diff_sigma_mm": 2.0
     }
   },
   "root": {
@@ -142,7 +150,25 @@
       "measurement_mean_error_arcsec_range": [
         20.0,
         30.0
-      ]
+      ],
+      "half_set_diff_arcsec": 30.0,
+      "measurement_method_checks": {
+        "_note": "测回法限差 (图根, 根级 sigma_2c=15\" 产生的自然分散)",
+        "2sec": {
+          "half_set_diff_arcsec": 24.0,
+          "set_diff_arcsec": 24.0,
+          "2c_mutual_diff_arcsec": 13.0
+        },
+        "6sec": {
+          "half_set_diff_arcsec": 36.0,
+          "set_diff_arcsec": 36.0,
+          "2c_mutual_diff_arcsec": 18.0
+        }
+      }
+    },
+    "distance": {
+      "reading_diff_mm": 15.0,
+      "round_trip_diff_mm": 20.0
     },
     "closure": {
       "full_length_relative_closure": "1/2000",
@@ -151,7 +177,11 @@
     "simulation": {
       "angle_perturbation_sigma_arcsec": 10.0,
       "distance_perturbation_sigma_mm": 10.0,
-      "_sigma_source": "error_propagation.md A4.2 参考表 (图根行)"
+      "_sigma_source": "error_propagation.md A4.2 参考表 (图根行)",
+      "2c_perturbation_sigma_arcsec": 15.0,
+      "set_perturbation_sigma_arcsec": 8.0,
+      "distance_reading_sigma_mm": 2.5,
+      "reading_diff_sigma_mm": 5.0
     }
   },
   "rtk_reference": {

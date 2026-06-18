@@ -211,10 +211,10 @@ def _leveling_obs_table(section: LevelingSection, is_md: bool) -> str:
             format_meter(st.stadia_fore_m, 1),
             format_meter(st.distance_diff_m, 1),
             format_meter(st.cumulative_diff_m, 1),
-            format_mm(st.k_plus_black_minus_red_back_mm if is_double_face
-                      else st.base_aux_reading_diff_back_mm, 2),
-            format_mm(st.k_plus_black_minus_red_fore_mm if is_double_face
-                      else st.base_aux_reading_diff_fore_mm, 2),
+            format_mm((st.k_plus_black_minus_red_back_mm if is_double_face
+                      else st.base_aux_reading_diff_back_mm) / 1000.0, 2),
+            format_mm((st.k_plus_black_minus_red_fore_mm if is_double_face
+                      else st.base_aux_reading_diff_fore_mm) / 1000.0, 2),
             format_meter(st.height_diff_black_m if is_double_face
                          else st.height_diff_basic_m, hdp),
             format_meter(st.height_diff_red_m if is_double_face

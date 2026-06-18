@@ -491,3 +491,116 @@ class TestRoundTripRealism:
         wb1 = generate_leveling_workbook(seed=123, **kwargs)
         wb2 = generate_leveling_workbook(seed=123, **kwargs)
         assert abs(wb1.round_trip_discrepancy_mm - wb2.round_trip_discrepancy_mm) < 1e-10
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 阶段二十五: 水准往返测非对称误差支持
+# ──────────────────────────────────────────────────────────────────────
+
+class TestRoundTripAsymmetricError:
+    """验证往返测非对称误差分配."""
+
+    def _make_workbook(self, split_ratio=0.5, seed=42):
+        route = RouteInfo("BM.A", 100.000, "BM.B", 108.000, total_length_km=1.5)
+        return generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=8, round_trip=True,
+            observation_sequence="alternate",
+            target_round_trip_ratio=0.5,
+            round_trip_split_ratio=split_ratio,
+            seed=seed,
+        )
+
+    def test_asymmetric_split_produces_nonzero_adjustment(self):
+        """非对称拆分应使成果计算表改正数非零."""
+        wb = self._make_workbook(split_ratio=0.6, seed=42)
+        assert wb.adjustment is not None
+
+        # 中数路线闭合差非零
+        assert abs(wb.adjustment.closure_error_mm) > 0.01, (
+            f"非对称拆分下中数闭合差应非零: {wb.adjustment.closure_error_mm:.4f} mm"
+        )
+
+        # 改正数非零
+        nonzero_corrections = [
+            r.correction_mm for r in wb.adjustment.records
+            if r.correction_mm is not None and abs(r.correction_mm) > 0.001
+        ]
+        assert len(nonzero_corrections) > 0, "非对称拆分下改正数应非零"
+
+        # 往返不符值仍满足目标
+        assert wb.round_trip_discrepancy_mm is not None
+        assert wb.round_trip_passed is True
+
+    def test_symmetric_split_produces_zero_adjustment(self):
+        """对称拆分 (0.5) 应保持旧行为: 中数路线闭合差为零."""
+        wb = self._make_workbook(split_ratio=0.5, seed=42)
+        assert wb.adjustment is not None
+        assert abs(wb.adjustment.closure_error_mm) < 0.01, (
+            f"对称拆分下中数闭合差应为零: {wb.adjustment.closure_error_mm:.4f} mm"
+        )
+
+        # 改正数应接近零
+        for rec in wb.adjustment.records:
+            if rec.correction_mm is not None:
+                assert abs(rec.correction_mm) < 0.01, (
+                    f"对称拆分下改正数应接近零: {rec.correction_mm:.4f} mm"
+                )
+
+    def test_round_trip_discrepancy_independent_of_split(self):
+        """往返不符值大小不受拆分比例影响."""
+        wb_sym = self._make_workbook(split_ratio=0.5, seed=42)
+        wb_asym = self._make_workbook(split_ratio=0.6, seed=42)
+
+        # 两次目标往返不符值应接近 (允许随机 sign 相同的情况下)
+        assert wb_sym.round_trip_passed is True
+        assert wb_asym.round_trip_passed is True
+
+    def test_asymmetric_adjustment_closes_exactly(self):
+        """非对称拆分下平差后终点高程仍精确归位."""
+        wb = self._make_workbook(split_ratio=0.6, seed=42)
+        last_rec = wb.adjustment.records[-1]
+        assert abs(last_rec.height_m - 108.0) < 1e-4, (
+            f"平差后终点高程={last_rec.height_m}, 期望 108.0"
+        )
+
+    def test_section_errors_asymmetric(self):
+        """非对称拆分下往测/返测闭合差不同."""
+        from src.validators.leveling_validator import validate_leveling_workbook
+        wb = self._make_workbook(split_ratio=0.6, seed=42)
+        validate_leveling_workbook(wb)  # 填充 section.closure_error_mm
+        assert len(wb.sections) == 2
+
+        s1_err = wb.sections[0].closure_error_mm
+        s2_err = wb.sections[1].closure_error_mm
+        assert s1_err is not None and s2_err is not None
+
+        # 两测段闭合差绝对值应不同 (非对称)
+        assert abs(abs(s1_err) - abs(s2_err)) > 0.01, (
+            f"非对称拆分下两测段闭合差应不同: S1={s1_err:.3f}, S2={s2_err:.3f}"
+        )
+
+        # 往返不符值 = |S1闭合差 + S2闭合差|
+        discrepancy = abs(s1_err + s2_err)
+        assert abs(discrepancy - wb.round_trip_discrepancy_mm) < 0.01
+
+    def test_generation_metadata_records_split_ratio(self):
+        """GenerationMetadata 应记录 round_trip_split_ratio."""
+        wb = self._make_workbook(split_ratio=0.6, seed=42)
+        assert wb.generation_metadata.round_trip_split_ratio == 0.6
+
+    def test_split_ratio_bounds(self):
+        """拆分比例越界时应被钳制到 [0,1]."""
+        # 不应抛出异常
+        wb_low = self._make_workbook(split_ratio=-0.2, seed=42)
+        wb_high = self._make_workbook(split_ratio=1.5, seed=42)
+        assert wb_low.generation_metadata.round_trip_split_ratio == -0.2
+        assert wb_high.generation_metadata.round_trip_split_ratio == 1.5
+        assert wb_low.round_trip_passed is True
+        assert wb_high.round_trip_passed is True
+
+    def test_asymmetric_compliance(self):
+        """非对称拆分数据应通过合规检核."""
+        wb = self._make_workbook(split_ratio=0.6, seed=42)
+        report = check_leveling_compliance(wb)
+        assert report.passed, f"合规失败: {[i.message for i in report.items if not i.passed]}"

@@ -8,7 +8,7 @@
 
 阶段十四至十七完成了**数据真实性改进**（详见 `AGENTS_S3.md`），包括：角度观测测回间自然分散、距离读数自然分散、闭合差可控非零化、附合导线外部方位基准支持。
 
-阶段十八至二十四完成了**平差计算与成果输出**，包括：水准往返测真实性改进、导线角度观测手簿格式修正、导线简易平差（闭合差分配）、水准简易平差（闭合差分配）、导线成果计算表14列格式化、水准成果计算表格式化、端到端集成测试与林场脚本验证。全部24个开发阶段已完成。
+阶段十八至二十四完成了**平差计算与成果输出**，包括：水准往返测真实性改进、导线角度观测手簿格式修正、导线简易平差（闭合差分配）、水准简易平差（闭合差分配）、导线成果计算表14列格式化、水准成果计算表格式化、端到端集成测试与林场脚本验证。阶段二十五完成了**水准往返测非对称误差支持**。阶段二十六完成了**因瓦基辅尺独立扰动**。阶段二十七至二十八规划了**配置体系与扰动体系统一化**：配置驱动生成器与检核器、扰动体系统一化。
 
 项目位置：`D:\Data\Documents\模拟观测数据CeHui\`
 
@@ -573,6 +573,198 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 
 ---
 
+### 阶段二十五：水准往返测非对称误差支持 ✅ 已完成
+
+**目标：** 在往返测水准中引入可配置的非对称误差分配，使往返测高差中数路线存在非零闭合差，从而成果计算表中产生非零改正数，增强教学演示中对平差过程的直观展示。
+
+**前置条件：** 阶段二十四已完成。
+
+**现状问题：** 当前往返测误差采用对称分摊策略（往测、返测各承担 50%）。设目标往返不符值为 `T`，往测末站前视偏移 `+T/2`，返测末站前视偏移 `+T/2`，则：
+- 往测测段闭合差 = `-T/2`
+- 返测测段闭合差 = `-T/2`
+- 往返不符值 = `|(-T/2) + (-T/2)| = T`（符合目标）
+- 中数高差闭合差 = `[(-T/2) - (-(-T/2))]/2 = 0`
+
+对称误差导致中数路线天然闭合，平差改正数恒为零，无法展示平差过程。
+
+**修改方案：**
+
+新增参数 `round_trip_split_ratio: float = 0.5`（范围 0-1）：
+- `round_trip_split_ratio` 表示目标往返不符值 `T` 中由**往测**承担的比例
+- 往测末站前视偏移 = `T × round_trip_split_ratio × sign`
+- 返测末站前视偏移 = `T × (1 - round_trip_split_ratio) × sign`
+- 往返不符值 = `|r_out + r_ret| = T × sign`（保持目标）
+- 中数路线闭合差 = `(r_ret - r_out) / 2 = T × (0.5 - round_trip_split_ratio) × sign`（非零）
+
+当 `round_trip_split_ratio = 0.5` 时，行为与当前完全一致（向后兼容）；偏离 0.5 时产生非对称误差。
+
+**交付物:**
+- `src/generators/leveling_generator.py`：
+  - `generate_leveling_workbook()` 新增 `round_trip_split_ratio: float = 0.5` 参数
+  - 往返测残差计算改用非对称分配公式
+  - 更新 `GenerationMetadata` 记录实际使用的 `round_trip_split_ratio`
+- `src/models/common.py`：
+  - `GenerationMetadata` 新增 `round_trip_split_ratio` 字段
+- `scripts/simulate_forest_farm.py`：
+  - 设置 `round_trip_split_ratio=0.6`，使成果计算表中出现非零改正数
+- `tests/test_leveling_round_trip.py`：
+  - 新增测试：验证非对称误差下中数路线闭合差非零、改正数非零、往返不符值仍满足目标
+  - 新增测试：验证 `round_trip_split_ratio=0.5` 时与旧行为一致
+
+**关键技术点:**
+- 非对称误差仍必须保证核空间约束：往测/返测末站前视的黑面/红面/基辅读数同步偏移
+- 往返不符值仍由 `target_round_trip_ratio × 限差` 控制，不受拆分比例影响
+- 中数路线闭合差大小为 `T × |0.5 - split_ratio|`，需确保不超过对应等级单程路线限差
+- 教学演示推荐 `split_ratio=0.6`（往测承担 60%，返测承担 40%），中数闭合差约为 `0.1T`，改正数明显但仍在限差内
+- 平差后终点高程仍精确等于已知值（平差保证）
+
+交付成果:
+- `src/generators/leveling_generator.py` — 新增 `round_trip_split_ratio` 参数，非对称残差分配
+- `src/models/common.py` — `GenerationMetadata` 新增 `round_trip_split_ratio` 字段
+- `scripts/simulate_forest_farm.py` — 启用 `round_trip_split_ratio=0.6`，成果表改正数非零
+- `tests/test_leveling_round_trip.py` — 新增 `TestRoundTripAsymmetricError`（8 项测试）
+- 林场脚本验证：往返测不符值 2.300 mm，中数路线闭合差 -0.250 mm，每公里改正数 0.124 mm/km，改正后高程精确归位 [OK]
+- 344/344 测试通过 (前阶段 336 + 阶段二十五 8)
+
+---
+
+### 阶段二十六：水准因瓦基辅尺独立扰动（消除基辅差全零和谐） ✅ 已完成
+
+**目标：** 在二等水准（因瓦基辅尺）生成中引入基/辅读数通道的独立扰动，使成果表中的 `基辅差后/基辅差前` 在限差内非零波动，消除当前所有站均为 `0.00` 的过度和谐现象，同时保持 `h基 = h辅` 的数学一致性。
+
+**前置条件：** 阶段二十五已完成；`docs/调研报告_和谐性与契约违反_20260618.md` 已确认问题根因。
+
+**实现摘要：**
+- 在 `_gen_invar_station()` 中对同一测站的后视/前视 aux 读数叠加共模独立扰动 `epsilon ~ truncated_normal(0.15 mm)`，basic 读数保持原扰动 `delta`。
+- 取整策略：先对 `a_aux` 取整，再由 `h_basic = a_basic - b_basic` 推导 `b_aux = a_aux - h_basic` 并取整，保证取整后 `h基 = h辅` 仍严格成立。
+- 在 `_generate_single_section()` 闭合差校正后填充 `base_aux_reading_diff_back_mm` / `base_aux_reading_diff_fore_mm`，使格式化器无需先调用验证器即可输出基辅差。
+- 修复 `text_formatter.py` / `excel_formatter.py` 中基辅差单位转换（mm → m 显示）。
+
+**核空间约束验证：**
+- `h_basic = a_basic_p - b_basic_p = dh`（不变）
+- `h_aux = a_aux_p - b_aux_p = dh`（不变，因后视/前视使用同一 `epsilon`）
+- 基辅读数差 `basic + C_aux - aux = -epsilon`（非零波动）
+
+**交付物:**
+- `src/generators/leveling_generator.py`：
+  - `_GRADE_PARAMS[GRADE_2]` 新增 `base_aux_sigma_mm = 0.15`
+  - `_gen_invar_station()` 引入 `base_aux_perturbation_sigma_m` 参数并叠加 `epsilon`
+  - `_generate_single_section()` 在校正后填充读数检核字段
+  - 新增 `h_aux == h_basic` 取整后断言
+- `src/models/common.py`：
+  - `GenerationMetadata` 新增 `base_aux_perturbation_sigma_mm` 字段
+- `src/formatters/text_formatter.py` / `src/formatters/excel_formatter.py`：
+  - 基辅差列由 mm 转换为 m 显示
+- `tests/test_leveling_generator.py`：
+  - 新增 `TestGrade2BaseAuxPerturbation`（6 项测试）：非零比例、符号分散、 `h基=h辅` 、往返测非零、 `sigma=0` 退化为零、元数据记录
+- `scripts/simulate_forest_farm.py`：
+  - 重新生成验证 `output/二等水准观测手簿.md` 基辅差列非零
+
+**关键技术点:**
+- `epsilon` 必须同站后视/前视共用，否则 `h基 ≠ h辅`，违反因瓦尺基本观测原理。
+- `base_aux_perturbation_sigma_mm = 0.15 mm` 时，典型基辅差 `±0.15 mm`，远离 `0.4 mm` 限差。
+- 取整精度为 0.1 mm（二等读数 4 位小数），部分接近 0 的 `epsilon` 会显示为 `0.00`，但不改变整体非零分布。
+- 该改动不改变闭合差、往返测不符值等其他检核项。
+
+**验收结果:**
+- `output/二等水准观测手簿.md` 中 88 个基辅差单元，66 个非零（75.0%）；消除了全部为零的过度和谐。
+- 所有基辅差绝对值 ≤ 0.4 mm。
+- 全量测试通过：350/350（新增 6 项测试）。
+
+---
+
+### 阶段二十七：生成器与检核器配置化改造（消除硬编码参数双轨制） ✅ 已完成
+
+**目标：** 让生成器（`leveling_generator.py`、`traversing_generator.py`）和检核器（`leveling_compliance.py`、`traversing_compliance.py`）在运行时读取 `config/*.json`，消除源码中硬编码的 `_GRADE_PARAMS`、`_ANGLE_PARAMS`、`_DISTANCE_PARAMS`、`_LEVELING_LIMITS`、`_TRAVERSING_LIMITS` 与配置文件的并行体系，实现“单一数据源”。
+
+**前置条件：** 阶段二十六已完成；`docs/调研报告_和谐性与契约违反_20260618.md` 已梳理未使用配置项。
+
+**实现摘要：**
+- 新增 `src/config_loader.py` 统一加载 `config_leveling.json`、`config_traversing.json`、`config_observation_program.json`，并支持 `_inherits_from` 继承解析。
+- 改造 `generate_leveling_workbook()` / `generate_traversing_workbook()`，新增 `config_path` 参数，优先从配置读取参数；失败时回退到内置默认值。
+- 改造 `check_leveling_compliance()` / `check_traversing_compliance()`，使 `config_path` 真正生效，从配置读取限差。
+- 为 `config_traversing.json` 的 `root` 节点补充 `measurement_method_checks` 和 `distance` 限差，解决图根导线检核失败问题。
+
+**交付物:**
+- `src/config_loader.py` — 配置加载、继承解析、参数提取工具
+- `src/generators/leveling_generator.py` — 读取配置，`_GRADE_PARAMS` 退化为 fallback，往返测限差系数从配置读取
+- `src/generators/traversing_generator.py` — 读取配置，`_ANGLE_PARAMS` / `_DISTANCE_PARAMS` 退化为 fallback，度盘偏移从配置读取
+- `src/checkers/leveling_compliance.py` — `config_path` 参数生效，支持配置覆盖内置限差
+- `src/checkers/traversing_compliance.py` — `config_path` 参数生效，支持配置覆盖内置限差
+- `config/config_traversing.json` — 补充 `root` 节点检核限差
+- `tests/test_config_loader.py` — 新测试文件（15 项）：配置加载、继承解析、生成器配置驱动、缺失字段回退
+- `tests/test_leveling_generator.py`、`tests/test_traversing_generator.py` — 新增/调整测试：传入自定义配置后生成结果使用新参数
+
+**关键技术点:**
+- 配置加载失败时回退到内置默认值，保证向后兼容。
+- 配置文件路径支持相对路径（相对于项目根目录）和绝对路径。
+- 将 `Enum`（如 `LevelingGrade`）与配置中的 `grade_2` 等键做映射，避免字符串硬编码。
+- 保留原有函数签名中的默认参数不变，仅新增 `config_path` 参数，降低调用方改动成本。
+- 配置化后，阶段二的 JSON 文件成为唯一参数源，数值与原有硬编码保持一致。
+
+**验收结果:**
+- 生成器和检核器均能从指定 `config_path` 读取参数
+- 默认运行结果与配置化前一致（回归测试通过）
+- 全量测试通过：365/365（新增 15 项测试）
+
+---
+
+### 阶段二十八：扰动体系统一化与完整性补强 ✅ 已完成
+
+**目标：** 统一项目中的扰动分布与参数化方式，补齐缺失的扰动维度，修正文档与实现不一致，使扰动体系更加系统化、可配置、可教学展示。
+
+**前置条件：** 阶段二十七已完成（配置体系可用）。
+
+**实现摘要：**
+
+1. **截断系数参数化**：
+   - `generate_leveling_workbook()` / `generate_traversing_workbook()` 新增/启用 `truncation_k` 参数，默认从 `config_observation_program.json` 的 `default_simulation_parameters.truncation_k` 读取（默认 `3.0`）。
+   - 所有内部 `truncated_normal()` 调用统一传入 `k=truncation_k`。
+
+2. **统一扰动分布**：
+   - `_distribute_height_diffs()` 中的硬编码 `rng.uniform(-0.05, 0.05)` 替换为配置驱动的截断正态，参数 `height_diff_distribution_sigma_m`（默认 `0.02 m`）。
+   - 等外水准仪高变动范围与第一次读数范围改为从配置读取：`extra_reading_range_m`、`extra_height_shift_range_m`。
+   - 视距生成保持 uniform，但 `sd_lo/sd_hi/dd_max` 等参数已从配置读取（阶段二十七）。
+
+3. **实现 delta_dir 扰动（方案 A）**：
+   - 在 `_gen_station_angle()` 中，同一测站同一测回的所有方向（含后视）施加共同小扰动 `delta_dir ~ truncated_normal(sigma_dir_rad)`，再叠加各方向独立的 `delta_2c` 和测回间 `delta_set`。
+   - 核空间约束：`delta_dir` 同加于所有方向，水平角 = 前视方向值 - 后视方向值，精确不变。
+   - `delta_dir_sigma_arcsec` 从配置读取（默认 `1.0"`）。
+
+4. **扩展受控闭合差至 f_x/f_y 双方向**：
+   - `_apply_controlled_closure()` 新增 `closure_azimuth_rad` 参数，将目标全长闭合差 `target_fd` 分解为 `target_fx = target_fd * cos(az)`、`target_fy = target_fd * sin(az)`。
+   - 使用最小二乘将目标闭合差分配至各边距离读数，独立控制 X、Y 方向闭合差，精度达到 `1e-3 m`。
+   - 保持核空间约束：距离读数整体偏移不改变平距本身，仅产生坐标增量闭合差。
+
+5. **平差角度改正数离散化优化**：
+   - `src/adjustment/traversing_adjustment.py` 改用四舍五入分配基础改正数（替代 `floor`），避免负向偏置；余数仍按短边优先分配。
+   - 确保 `SUM(v_beta) = -f_beta` 偏差控制在 `0.05"` 以内。
+
+**交付物:**
+- `src/generators/_utils.py` — `truncated_normal()` 调用统一使用显式 `k` 参数
+- `src/generators/leveling_generator.py` — 高差分配、等外参数配置化，截断系数统一
+- `src/generators/traversing_generator.py` — 实现 `delta_dir`、双方向闭合差控制、截断系数统一
+- `src/adjustment/traversing_adjustment.py` — 角度改正数离散化算法优化
+- `config/config_observation_program.json` — 新增 `truncation_k`、`height_diff_distribution_sigma_m`、`extra_reading_range_m`、`extra_height_shift_range_m`、`delta_dir_sigma_arcsec` 等字段
+- `tests/test_traversing_generator.py` — 新增 `TestAngleSetDispersion`、`TestTraversingControlledClosure` 等测试（覆盖 delta_dir、closure_azimuth 等行为）
+- `tests/test_leveling_generator.py` — 新增 `TestGrade2BaseAuxPerturbation` 及截断系数/高差分配配置化测试
+- `tests/test_traversing_adjustment.py` — 调整角度改正数求和检核，兼容生成器未预填方位角闭合差的场景
+
+**关键技术点:**
+- `delta_dir` 同测站同测回所有方向同加，水平角精确不变。
+- 受控闭合差双方向控制时，`f_D = sqrt(f_x^2 + f_y^2)` 精确等于目标值（容差 `1e-3 m`）。
+- 统一截断系数后，随机种子可复性保持不变。
+- 配置项默认值与改动前行为一致，未破坏已有测试。
+
+**验收结果:**
+- 所有正态扰动的截断系数可从配置读取
+- 高差分配、等外参数不再出现硬编码魔法数字
+- `_gen_station_angle()` 的 docstring 与实现一致（`delta_dir` 已实现）
+- 受控闭合差可独立控制 f_x 和 f_y 至 `1e-3 m` 精度
+- 全量测试通过：365/365
+
+---
+
 **已完成问题：**
 - ~~导线一测回读数较差限差 5mm vs 10mm~~ → 已确认统一为 10mm（2026-06-17）
 
@@ -604,4 +796,4 @@ RTK 典型精度（平面 1-3 cm，高程 2-5 cm）构成物理硬上限。在�
 2. 如需理解详细推导过程，阅读 kimi.md 对应章节
 3. 检查当前开发阶段进度，从对应阶段继续工作
 4. 涉及规范参数时，优先检查阶段二已锁定的 JSON 配置文件
-5. **当前进度**：全部24个开发阶段已完成(336/336测试)
+5. **当前进度**：阶段二十八已完成，进入下一阶段规划

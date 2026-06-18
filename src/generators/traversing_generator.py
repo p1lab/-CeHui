@@ -28,6 +28,11 @@ from ..models.traversing import (
 from ..validators.traversing_validator import (
     normalize_angle, normalize_2c, propagate_azimuth,
 )
+from ..config_loader import (
+    load_traversing_config, load_observation_program_config,
+    get_traversing_grade_params, get_degree_plate_offset_rad,
+    get_traversing_limits,
+)
 from ._utils import truncated_normal, arcsec_to_rad, mm_to_m
 
 
@@ -107,6 +112,8 @@ def _gen_station_angle(
     sigma_set_rad: float,
     angle_definition: AngleDefinition,
     rng: np.random.Generator,
+    degree_plate_offset_rad: float = 0.000727,
+    truncation_k: float = 3.0,
 ) -> StationAngleObservation:
     """
     生成单站角度观测.
@@ -135,12 +142,14 @@ def _gen_station_angle(
 
     angle_sets = []
     for j in range(num_sets):
-        # 度盘零位 (config: L_0_j = π/m * j)
-        # 后视盘左读数精确等于 L0 (0°, 90°, 180°, ...)
-        L0 = (math.pi / num_sets) * j
+        # 度盘零位 (config: L_0_j = π/m * j + offset)
+        L0 = (math.pi / num_sets) * j + degree_plate_offset_rad
 
-        # 测回间角值扰动 (真实性改进: 各测回独立)
-        delta_set = truncated_normal(sigma_set_rad, rng=rng)
+        # delta_dir: 同一测站同一测回所有方向共同扰动 (度盘零位不确定性)
+        delta_dir = truncated_normal(sigma_dir_rad, k=truncation_k, rng=rng)
+
+        # 测回间角值扰动 (真实性改进: 各测回独立, 仅前视)
+        delta_set = truncated_normal(sigma_set_rad, k=truncation_k, rng=rng)
 
         # 扰动后的角值: beta_set = true_angle + delta_set
         # 将 delta_set 分配到前视方向值: lbar_fore += delta_set
@@ -154,20 +163,19 @@ def _gen_station_angle(
             target_delta_set = delta_set if target == fore_name else 0.0
 
             # 各方向独立 2C 扰动
-            delta_2c = truncated_normal(sigma_2c_rad / 2.0, rng=rng)
+            delta_2c = truncated_normal(sigma_2c_rad / 2.0, k=truncation_k, rng=rng)
 
             if target == back_name:
-                # 后视盘左: 无扰动 (观测员瞄准后视设定度盘读数)
-                L = L0
+                # 后视盘左/盘右: 所有方向共同加 delta_dir, 再叠加 2C 效应
+                L = L0 + delta_dir
                 L = normalize_angle(L)
-                # 后视盘右: 仅有 2C 效应, 无 delta_dir
-                R = L0 - delta_2c + math.pi
+                R = L0 + delta_dir - delta_2c + math.pi
                 R = normalize_angle(R)
             else:
-                # 前视: 正常扰动 (含 delta_set, delta_2c, 不含 delta_dir)
-                L = L0 + lbar + target_delta_set + delta_2c / 2.0
+                # 前视盘左/盘右: delta_dir + 方向值 + 测回间扰动 + 2C 效应
+                L = L0 + delta_dir + lbar + target_delta_set + delta_2c / 2.0
                 L = normalize_angle(L)
-                R = L0 + lbar + target_delta_set - delta_2c / 2.0 + math.pi
+                R = L0 + delta_dir + lbar + target_delta_set - delta_2c / 2.0 + math.pi
                 R = normalize_angle(R)
 
             directions.append(
@@ -208,6 +216,7 @@ def _gen_edge_distance(
     num_sets: int = 1,
     instrument_height_m: float = 1.50,
     prism_height_m: float = 1.20,
+    truncation_k: float = 3.0,
 ) -> EdgeDistanceObservation:
     """
     生成单边距离观测 (往返).
@@ -225,7 +234,7 @@ def _gen_edge_distance(
         readings = []
         for _ in range(n_readings):
             # 各次读数独立扰动 (真实性改进)
-            delta_reading = truncated_normal(sigma_reading_m, rng=rng)
+            delta_reading = truncated_normal(sigma_reading_m, k=truncation_k, rng=rng)
             reading = true_D + delta_reading
             readings.append(
                 DistanceReading(reading_m=reading, is_slope=True)
@@ -392,6 +401,18 @@ def _build_computation(
 # 闭合差可控非零化
 # ──────────────────────────────────────────────────────────────────────
 
+def _recompute_edge_distance(edge: EdgeDistanceObservation) -> None:
+    """根据读数重新计算边的平距均值、往返较差和 final_distance."""
+    fwd_vals = [r.reading_m for s in edge.forward_sets for r in s.readings]
+    bwd_vals = [r.reading_m for s in edge.backward_sets for r in s.readings]
+    fwd_mean = sum(fwd_vals) / len(fwd_vals) if fwd_vals else 0.0
+    bwd_mean = sum(bwd_vals) / len(bwd_vals) if bwd_vals else 0.0
+    edge.forward_mean_distance_m = fwd_mean
+    edge.backward_mean_distance_m = bwd_mean
+    edge.round_trip_diff_mm = abs(fwd_mean - bwd_mean) * 1000.0
+    edge.final_distance_m = (fwd_mean + bwd_mean) / 2.0
+
+
 def _apply_controlled_closure(
     distance_obs: list,
     points: List[Tuple[str, float, float]],
@@ -399,24 +420,26 @@ def _apply_controlled_closure(
     target_ratio: float,
     rng: np.random.Generator,
     distance_dp: int,
+    rel_limit: float,
+    truncation_k: float = 3.0,
+    closure_azimuth_rad: Optional[float] = None,
 ) -> None:
     """
     对每条边施加整体距离偏移, 使坐标闭合差达到目标值.
 
     策略:
         目标全长闭合差 f_d = target_ratio × K_rel × total_length
-        各边施加扰动 delta_D_i ~ N(0, sigma_D), sigma_D 经验调整使
-        累加后 f_d 接近目标.
 
-    注: 此处仅控制 f_x (沿 X 方向累积扰动).
-        f_y 受 delta_set 扰动自然产生, 此处不控制.
+    当 closure_azimuth_rad 为 None 时 (旧行为):
+        各边施加扰动 delta_D_i ~ N(0, sigma_D), 仅控制 f_d 大小,
+        方向由随机性决定.
+
+    当 closure_azimuth_rad 指定时 (新行为):
+        同时控制 f_x 和 f_y, 使闭合差向量方向等于 closure_azimuth_rad.
+        使用最小范数最小二乘将目标 f_x/f_y 分配到各边距离偏移.
     """
-    rel_limits = {
-        TraverseGrade.GRADE_1: 1.0 / 15000,
-        TraverseGrade.GRADE_2: 1.0 / 10000,
-        TraverseGrade.ROOT:    1.0 / 4000,
-    }
-    rel_limit = rel_limits[grade]
+    if rel_limit <= 0.0:
+        return
 
     total_length = sum(
         _compute_distance(points[i][1], points[i][2],
@@ -431,15 +454,46 @@ def _apply_controlled_closure(
         return
 
     n = len(distance_obs)
-    # 经验: 各边扰动累加后 f_d ≈ sigma × sqrt(n) × cos(theta)
-    # 取 sigma 使 f_d ≈ target_fd
-    sigma_D_m = target_fd / max(1.0, math.sqrt(n))
 
+    if closure_azimuth_rad is None:
+        # 旧行为: 随机扰动, 仅控制 f_d 大小
+        sigma_D_m = target_fd / max(1.0, math.sqrt(n))
+        for edge in distance_obs:
+            delta_D_m = truncated_normal(sigma_D_m, k=truncation_k, rng=rng)
+            for ds in edge.forward_sets + edge.backward_sets:
+                for r in ds.readings:
+                    r.reading_m = r.reading_m + delta_D_m
+    else:
+        # 新行为: 同时控制 f_x 和 f_y
+        target_fx = target_fd * math.cos(closure_azimuth_rad)
+        target_fy = target_fd * math.sin(closure_azimuth_rad)
+
+        azimuths = [
+            _compute_azimuth(points[i][1], points[i][2],
+                             points[i + 1][1], points[i + 1][2])
+            for i in range(n)
+        ]
+        cos_a = np.array([math.cos(az) for az in azimuths])
+        sin_a = np.array([math.sin(az) for az in azimuths])
+        A = np.vstack([cos_a, sin_a])
+        b = np.array([target_fx, target_fy])
+
+        AAT = A @ A.T
+        det = float(AAT[0, 0] * AAT[1, 1] - AAT[0, 1] * AAT[1, 0])
+        if abs(det) < 1e-12:
+            return
+        inv_AAT = np.linalg.inv(AAT)
+        delta_base = A.T @ inv_AAT @ b  # 长度 n
+
+        for i, edge in enumerate(distance_obs):
+            delta_D_m = float(delta_base[i])
+            for ds in edge.forward_sets + edge.backward_sets:
+                for r in ds.readings:
+                    r.reading_m = r.reading_m + delta_D_m
+
+    # 重新计算各边平距统计量 (供成果计算表使用)
     for edge in distance_obs:
-        delta_D_m = truncated_normal(sigma_D_m, rng=rng)
-        for ds in edge.forward_sets + edge.backward_sets:
-            for r in ds.readings:
-                r.reading_m = r.reading_m + delta_D_m
+        _recompute_edge_distance(edge)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -463,8 +517,11 @@ def generate_traversing_workbook(
     metadata: Optional[SurveyMetadata] = None,
     seed: Optional[int] = None,
     target_closure_ratio: float = 0.0,
+    closure_azimuth_rad: Optional[float] = None,
     start_reference_point: Optional[Tuple[str, float, float]] = None,
     end_reference_point: Optional[Tuple[str, float, float]] = None,
+    config_path: Optional[str] = None,
+    truncation_k: float = 3.0,
 ) -> TraversingWorkbook:
     """
     从 RTK 坐标真值逆向生成导线观测手簿.
@@ -480,8 +537,11 @@ def generate_traversing_workbook(
         metadata: 表头元数据
         seed: 随机种子
         target_closure_ratio: 目标闭合差/限差比值 (0-1, 默认0=精确零)
+        closure_azimuth_rad: 目标闭合差方位角 (rad, None=方向随机)
         start_reference_point: 起始外部基准点 (name, x, y), 如 ("B2", 9800, 5000)
         end_reference_point: 终止外部基准点 (name, x, y), 如 ("G2", 11200, 7500)
+        config_path: 导线配置文件路径 (None=使用默认 config/config_traversing.json)
+        truncation_k: 截断系数 (默认 3.0)
 
     返回:
         TraversingWorkbook (可通过 validate_traversing_workbook 验证)
@@ -493,13 +553,35 @@ def generate_traversing_workbook(
     """
     rng = np.random.default_rng(seed)
 
-    ap = _ANGLE_PARAMS[grade]
-    dp = _DISTANCE_PARAMS[grade]
+    # 从配置文件加载参数 (失败时回退到内置 _ANGLE_PARAMS / _DISTANCE_PARAMS)
+    trav_cfg = load_traversing_config(config_path)
+    prog_cfg = load_observation_program_config(None)
+    if trav_cfg:
+        ap, dp = get_traversing_grade_params(trav_cfg, grade)
+        limits = get_traversing_limits(trav_cfg, grade)
+        rel_denom = limits[AngleObservationMethod.DIRECTION].get(
+            "relative_closure_denominator", 15000)
+        rel_limit = 1.0 / rel_denom if rel_denom > 0 else 0.0
+    else:
+        ap = _ANGLE_PARAMS[grade]
+        dp = _DISTANCE_PARAMS[grade]
+        rel_limits = {
+            TraverseGrade.GRADE_1: 1.0 / 15000,
+            TraverseGrade.GRADE_2: 1.0 / 10000,
+            TraverseGrade.ROOT: 1.0 / 4000,
+        }
+        rel_limit = rel_limits.get(grade, 1.0 / 15000)
+
+    # 截断系数: 配置优先
+    truncation_k = prog_cfg.get("default_simulation_parameters", {}).get(
+        "truncation_k", truncation_k)
+
     sigma_dir_rad = arcsec_to_rad(ap["sigma_arcsec"])
     sigma_2c_rad = arcsec_to_rad(ap["sigma_2c_arcsec"])
     sigma_set_rad = arcsec_to_rad(ap["sigma_set_arcsec"])
     reading_diff_sigma_m = mm_to_m(dp["reading_diff_sigma_mm"])
     distance_dp = TRAVERSE_DISTANCE_DECIMAL_PLACES
+    degree_plate_offset_rad = get_degree_plate_offset_rad(prog_cfg)
 
     n = len(points) - 1  # 边数
 
@@ -566,6 +648,8 @@ def generate_traversing_workbook(
             sigma_set_rad=sigma_set_rad,
             angle_definition=angle_definition,
             rng=rng,
+            degree_plate_offset_rad=degree_plate_offset_rad,
+            truncation_k=truncation_k,
         )
         angle_obs.append(obs)
 
@@ -587,6 +671,8 @@ def generate_traversing_workbook(
             sigma_set_rad=sigma_set_rad,
             angle_definition=angle_definition,
             rng=rng,
+            degree_plate_offset_rad=degree_plate_offset_rad,
+            truncation_k=truncation_k,
         )
         angle_obs.insert(0, obs_start)
 
@@ -607,6 +693,8 @@ def generate_traversing_workbook(
             sigma_set_rad=sigma_set_rad,
             angle_definition=angle_definition,
             rng=rng,
+            degree_plate_offset_rad=degree_plate_offset_rad,
+            truncation_k=truncation_k,
         )
         angle_obs.append(obs_end)
 
@@ -680,6 +768,7 @@ def generate_traversing_workbook(
             num_sets=num_distance_sets,
             instrument_height_m=i_h,
             prism_height_m=p_h,
+            truncation_k=truncation_k,
         )
 
         # 填充 final_distance (validator 会重新计算, 但我们需要用于 computation)
@@ -699,7 +788,9 @@ def generate_traversing_workbook(
     if target_closure_ratio > 0:
         _apply_controlled_closure(
             distance_obs, points, grade, target_closure_ratio, rng,
-            distance_dp,
+            distance_dp, rel_limit,
+            truncation_k=truncation_k,
+            closure_azimuth_rad=closure_azimuth_rad,
         )
 
     # ── 成果计算表 ──
@@ -722,6 +813,7 @@ def generate_traversing_workbook(
         generation_metadata=GenerationMetadata(
             target_grade=grade.value,
             random_seed=seed,
+            truncation_k=truncation_k,
             angle_sigma_arcsec=ap["sigma_arcsec"],
             angle_set_sigma_arcsec=ap["sigma_set_arcsec"],
             distance_sigma_mm=dp["sigma_mm"],

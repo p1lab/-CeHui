@@ -23,6 +23,7 @@ import math
 from ..models.common import LevelingGrade, RodType
 from ..models.leveling import LevelingWorkbook, LevelingSection, ExtraLevelingSection
 from ..validators.leveling_validator import validate_leveling_workbook
+from ..config_loader import load_leveling_config, get_leveling_limits
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -289,7 +290,7 @@ def check_leveling_compliance(
 
     参数:
         workbook: 水准观测手簿
-        config_path: 配置文件路径 (保留接口, 当前使用内置限差)
+        config_path: 配置文件路径 (None=使用默认, 默认=config/config_leveling.json)
 
     返回:
         LevelingComplianceReport
@@ -298,7 +299,11 @@ def check_leveling_compliance(
     validate_leveling_workbook(workbook)
 
     grade = workbook.grade
-    limits = _LEVELING_LIMITS.get(grade, {})
+    cfg = load_leveling_config(config_path)
+    if cfg:
+        limits = get_leveling_limits(cfg, grade)
+    else:
+        limits = _LEVELING_LIMITS.get(grade, {})
     report = LevelingComplianceReport(grade=grade)
 
     # 正规测段 (Grade 2/3/4)

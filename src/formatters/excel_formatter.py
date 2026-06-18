@@ -170,10 +170,10 @@ def _leveling_observation_sheet(wb_excel: Workbook, workbook: LevelingWorkbook):
                 fs.red_mid_m if is_df else fs.aux_mid_m,
                 st.stadia_back_m, st.stadia_fore_m,
                 st.distance_diff_m, st.cumulative_diff_m,
-                st.k_plus_black_minus_red_back_mm if is_df
-                else st.base_aux_reading_diff_back_mm,
-                st.k_plus_black_minus_red_fore_mm if is_df
-                else st.base_aux_reading_diff_fore_mm,
+                (st.k_plus_black_minus_red_back_mm if is_df
+                else st.base_aux_reading_diff_back_mm) / 1000.0,
+                (st.k_plus_black_minus_red_fore_mm if is_df
+                else st.base_aux_reading_diff_fore_mm) / 1000.0,
                 st.height_diff_black_m if is_df else st.height_diff_basic_m,
                 st.height_diff_red_m if is_df else st.height_diff_aux_m,
                 st.height_diff_mean_m,

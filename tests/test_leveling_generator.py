@@ -8,6 +8,8 @@ import math
 import pytest
 import sys
 import os
+import json
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -169,6 +171,131 @@ class TestGrade2Invar:
         )
         result = _run_and_validate(wb)
         assert result.all_passed
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 二等水准: 基辅独立扰动 (阶段二十六)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestGrade2BaseAuxPerturbation:
+    """因瓦基辅尺: 基/辅读数独立扰动, 消除基辅差全零和谐"""
+
+    def _make_workbook(self, num_stations=10, seed=42, round_trip=False):
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.500, 0.8)
+        rod_back = RodSpec("No.1", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        rod_fore = RodSpec("No.2", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        return generate_leveling_workbook(
+            route=route, grade=LevelingGrade.GRADE_2,
+            num_stations=num_stations, rod_back=rod_back, rod_fore=rod_fore,
+            seed=seed, round_trip=round_trip,
+        )
+
+    def test_base_aux_reading_diff_nonzero(self):
+        """基辅读数较差应在限差内非零波动"""
+        wb = self._make_workbook(num_stations=20, seed=42)
+        assert wb.generation_metadata.base_aux_perturbation_sigma_mm == 0.15
+
+        diffs = []
+        for section in wb.sections:
+            for st in section.stations:
+                back_diff = st.backsight.aux_mid_m - st.backsight.black_mid_m - 3.0155
+                fore_diff = st.foresight.aux_mid_m - st.foresight.black_mid_m - 3.0155
+                # 同站后视/前视基辅差应相等
+                assert abs(back_diff - fore_diff) < 1e-12
+                diffs.extend([back_diff * 1000.0])
+
+        nonzero = [d for d in diffs if abs(d) > 0.001]
+        assert len(nonzero) >= len(diffs) * 0.5, (
+            f"基辅读数较差非零比例过低: {len(nonzero)}/{len(diffs)}"
+        )
+        assert all(abs(d) <= 0.4 for d in diffs), (
+            f"基辅读数较差超限: max={max(abs(d) for d in diffs):.4f} mm"
+        )
+
+    def test_height_diff_basic_equals_aux(self):
+        """h基 与 h辅 取整后仍严格相等"""
+        wb = self._make_workbook(num_stations=10, seed=42)
+        result = _run_and_validate(wb)
+        assert result.all_passed
+
+        for section in wb.sections:
+            for st in section.stations:
+                h_basic = st.backsight.black_mid_m - st.foresight.black_mid_m
+                h_aux = st.backsight.aux_mid_m - st.foresight.aux_mid_m
+                assert abs(h_basic - h_aux) < 1e-12, (
+                    f"站{st.station_number}: h_basic={h_basic:.6f}, h_aux={h_aux:.6f}"
+                )
+
+    def test_round_trip_base_aux_diff_nonzero(self):
+        """往返测场景下基辅读数较差仍非零"""
+        wb = self._make_workbook(num_stations=10, seed=42, round_trip=True)
+        result = _run_and_validate(wb)
+        assert result.all_passed
+
+        diffs = []
+        for section in wb.sections:
+            for st in section.stations:
+                back_diff = st.backsight.aux_mid_m - st.backsight.black_mid_m - 3.0155
+                fore_diff = st.foresight.aux_mid_m - st.foresight.black_mid_m - 3.0155
+                assert abs(back_diff - fore_diff) < 1e-12
+                diffs.extend([back_diff * 1000.0])
+
+        nonzero = [d for d in diffs if abs(d) > 0.001]
+        assert len(nonzero) >= len(diffs) * 0.5
+        assert all(abs(d) <= 0.4 for d in diffs)
+
+    def test_zero_base_aux_sigma_gives_zero_diff(self):
+        """base_aux_sigma=0 时基辅差应在取整容差内接近零"""
+        route = RouteInfo("BM.A", 100.000, "BM.B", 101.500, 0.8)
+        rod_back = RodSpec("No.1", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+        rod_fore = RodSpec("No.2", RodType.INVAR_BASIC_AUX, c_aux_m=3.0155)
+
+        # 构造临时配置文件, 覆盖 base_aux_perturbation_sigma_mm = 0
+        custom_cfg = {"grade_2": {"simulation": {
+            "reading_perturbation_sigma_mm": 0.05,
+            "base_aux_perturbation_sigma_mm": 0.0,
+        }}}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(custom_cfg, f)
+            cfg_path = f.name
+        try:
+            wb = generate_leveling_workbook(
+                route=route, grade=LevelingGrade.GRADE_2,
+                num_stations=3, rod_back=rod_back, rod_fore=rod_fore,
+                seed=42, config_path=cfg_path,
+            )
+            assert wb.generation_metadata.base_aux_perturbation_sigma_mm == 0.0
+            for section in wb.sections:
+                for st in section.stations:
+                    back_diff = st.backsight.aux_mid_m - st.backsight.black_mid_m - 3.0155
+                    fore_diff = st.foresight.aux_mid_m - st.foresight.black_mid_m - 3.0155
+                    assert abs(back_diff) < 1e-6  # 取整容差 0.001 mm
+                    assert abs(fore_diff) < 1e-6
+        finally:
+            os.unlink(cfg_path)
+
+    def test_base_aux_diff_has_both_signs(self):
+        """基辅读数较差应出现正负两种符号,体现自然分散"""
+        wb = self._make_workbook(num_stations=50, seed=42)
+        diffs = []
+        for section in wb.sections:
+            for st in section.stations:
+                diff = st.backsight.aux_mid_m - st.backsight.black_mid_m - 3.0155
+                diffs.append(diff * 1000.0)
+        positives = [d for d in diffs if d > 0.001]
+        negatives = [d for d in diffs if d < -0.001]
+        assert len(positives) > 0 and len(negatives) > 0, (
+            f"基辅差符号单一: 正={len(positives)}, 负={len(negatives)}"
+        )
+
+    def test_base_aux_metadata_recorded(self):
+        """GenerationMetadata 应记录基辅扰动 sigma"""
+        wb = self._make_workbook(num_stations=3, seed=42)
+        gm = wb.generation_metadata
+        assert gm.base_aux_perturbation_sigma_mm == 0.15
+        assert gm.leveling_sigma_mm == 0.05
 
 
 # ──────────────────────────────────────────────────────────────────────

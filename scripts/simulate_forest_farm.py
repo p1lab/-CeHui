@@ -339,6 +339,7 @@ def simulate_leveling(normal_points):
         observation_sequence="alternate",
         target_closure_ratio=0.3,       # 各测段闭合差约为限差的30%
         target_round_trip_ratio=0.4,    # 往返不符值约为限差的40%
+        round_trip_split_ratio=0.6,     # 往返测非对称误差: 往测承担60%, 返测承担40%
     )
 
     # 正向验证

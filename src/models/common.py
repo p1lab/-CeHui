@@ -180,10 +180,14 @@ class GenerationMetadata:
 
     # 扰动强度 (实际使用的 sigma 值)
     leveling_sigma_mm: Optional[float] = None     # 水准读数扰动 sigma (mm)
+    base_aux_perturbation_sigma_mm: Optional[float] = None  # 因瓦尺基辅读数独立扰动 sigma (mm)
     angle_sigma_arcsec: Optional[float] = None     # 导线角度扰动 sigma (")
     angle_set_sigma_arcsec: Optional[float] = None  # 导线测回间角值扰动 sigma (")
     distance_sigma_mm: Optional[float] = None      # 导线距离扰动 sigma (mm)
     distance_reading_sigma_mm: Optional[float] = None  # 导线距离读数扰动 sigma (mm)
+
+    # 水准往返测非对称误差分配比例 (0-1, 0.5=对称)
+    round_trip_split_ratio: Optional[float] = None
 
     # 数学真值假设
     math_true_value_mode: bool = True
